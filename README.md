@@ -28,7 +28,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 
 ```bash
 # 1. Clone and enter the repo
-git clone <repo-url>
+git clone https://github.com/readtedium/easy-transcriber
 cd transcriber
 
 # 2. Create your .env
