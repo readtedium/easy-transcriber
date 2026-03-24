@@ -2,4 +2,6 @@
 media/
 uploads/
 history.json
+*.migrated
+data/
 node_modules/

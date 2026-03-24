@@ -42,8 +42,7 @@ cp .env.example .env
 # Edit .env and set DEEPGRAM_API_KEY
 
 # 3. Initialize data directories
-mkdir -p media uploads
-echo "[]" > history.json
+mkdir -p media uploads data
 
 # 4. Build and start
 docker compose up --build
@@ -90,24 +89,33 @@ When a `DEEPSEEK_API_KEY` is set, Transcriber automatically analyzes each transc
 
 ## Running without Docker
 
-You'll need Node.js 20+, `ffmpeg`, and `yt-dlp` installed on your system, then:
+> **Note:** Docker is the easier path and avoids the setup below. Consider it first.
+
+You'll need Node.js 20+, `ffmpeg`, `yt-dlp`, and native build tools for `better-sqlite3`:
+
+- **macOS**: `xcode-select --install`
+- **Ubuntu/Debian**: `sudo apt install build-essential python3-dev`
+- **Fedora**: `sudo dnf install gcc-c++ make python3-devel`
+- **Arch**: `sudo pacman -S base-devel python`
+- **Windows**: [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (select "Desktop development with C++")
+
+Then:
 
 ```bash
 npm install
 cp .env.example .env  # add your API key
-mkdir -p media uploads && echo "[]" > history.json
+mkdir -p media uploads data
 node server.js
 ```
 
 ## Notes
 
 - No authentication — intended for single-user self-hosted use. Do not expose to the public internet without adding auth.
-- Transcript history is stored in `history.json`. The `media/` directory holds saved audio files. Both are mounted as Docker volumes so data persists across restarts.
+- Transcript history is stored in a SQLite database (`transcripts.db`). The `media/` directory holds saved audio files. Both are mounted as Docker volumes so data persists across restarts. If upgrading from an older version, `history.json` will be automatically migrated on first boot.
 - URL transcriptions are not saved to `media/` (audio is downloaded, transcribed, then deleted).
 
 ## Roadmap
 
-- Move setup to SQLite database
 - Add authentication
 
 ## License

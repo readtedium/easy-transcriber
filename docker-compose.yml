@@ -10,5 +10,5 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./media:/app/media
-      - ./history.json:/app/history.json
+      - ./data:/app/data
     restart: unless-stopped

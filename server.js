@@ -2,6 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "@deepgram/sdk";
+import Database from "better-sqlite3";
 import multer from "multer";
 import cors from "cors";
 import path from "path";
@@ -12,10 +13,91 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HISTORY_FILE = path.join(__dirname, "history.json");
 const MEDIA_DIR = path.join(__dirname, "media");
 
 if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR);
+
+// ── Database ──────────────────────────────────────────────────────────────────
+const DB_DIR = path.join(__dirname, "data");
+if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+const db = new Database(path.join(DB_DIR, "transcripts.db"));
+db.exec(`CREATE TABLE IF NOT EXISTS history (
+  id           TEXT PRIMARY KEY,
+  filename     TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  yt_id        TEXT,
+  source_url   TEXT,
+  result       TEXT NOT NULL,
+  topics       TEXT,
+  speaker_names TEXT
+)`);
+
+function rowToEntry(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    filename: row.filename,
+    createdAt: row.created_at,
+    ytId: row.yt_id,
+    sourceUrl: row.source_url,
+    result: JSON.parse(row.result),
+    topics: row.topics ? JSON.parse(row.topics) : null,
+    speakerNames: row.speaker_names ? JSON.parse(row.speaker_names) : {},
+  };
+}
+
+const stmts = {
+  getAll:    db.prepare("SELECT * FROM history ORDER BY created_at DESC"),
+  getById:   db.prepare("SELECT * FROM history WHERE id = ?"),
+  insert:    db.prepare(`INSERT INTO history (id,filename,created_at,yt_id,source_url,result,topics,speaker_names)
+                         VALUES (@id,@filename,@created_at,@yt_id,@source_url,@result,@topics,@speaker_names)`),
+  deleteOne: db.prepare("DELETE FROM history WHERE id = ?"),
+  deleteAll: db.prepare("DELETE FROM history"),
+  setTopics: db.prepare("UPDATE history SET topics = ? WHERE id = ?"),
+  getSpeakerNames: db.prepare("SELECT speaker_names FROM history WHERE id = ?"),
+  setSpeakerNames: db.prepare("UPDATE history SET speaker_names = ? WHERE id = ?"),
+};
+
+function dbGetAll()    { return stmts.getAll.all().map(rowToEntry); }
+function dbGetById(id) { return rowToEntry(stmts.getById.get(id)); }
+function dbInsert(entry) {
+  stmts.insert.run({
+    id: entry.id, filename: entry.filename, created_at: entry.createdAt,
+    yt_id: entry.ytId ?? null, source_url: entry.sourceUrl ?? null,
+    result: JSON.stringify(entry.result),
+    topics: entry.topics ? JSON.stringify(entry.topics) : null,
+    speaker_names: entry.speakerNames ? JSON.stringify(entry.speakerNames) : null,
+  });
+}
+function dbDeleteById(id) { stmts.deleteOne.run(id); }
+function dbDeleteAll()    { stmts.deleteAll.run(); }
+function dbUpdateTopics(id, topics) {
+  stmts.setTopics.run(topics ? JSON.stringify(topics) : null, id);
+}
+function dbUpdateSpeakerNames(id, speakerNames) {
+  if (speakerNames === null) {
+    stmts.setSpeakerNames.run(null, id);
+  } else {
+    const row = stmts.getSpeakerNames.get(id);
+    const existing = row?.speaker_names ? JSON.parse(row.speaker_names) : {};
+    stmts.setSpeakerNames.run(JSON.stringify({ ...existing, ...speakerNames }), id);
+  }
+}
+
+// ── Migrate from history.json if present ─────────────────────────────────────
+(function migrateFromJson() {
+  const jsonPath = path.join(__dirname, "history.json");
+  if (!fs.existsSync(jsonPath)) return;
+  try {
+    const entries = JSON.parse(fs.readFileSync(jsonPath, "utf8") || "[]");
+    if (!Array.isArray(entries)) return;
+    db.transaction(() => { for (const e of entries) { try { dbInsert(e); } catch {} } })();
+    fs.renameSync(jsonPath, jsonPath + ".migrated");
+    if (entries.length) console.log(`Migrated ${entries.length} entries from history.json`);
+  } catch (err) {
+    console.error("history.json migration failed:", err.message);
+  }
+})();
 
 const app = express();
 const server = createServer({ maxHeaderSize: 32768 }, app);
@@ -39,13 +121,6 @@ function getYouTubeId(url) {
   return null;
 }
 
-function loadHistory() {
-  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, "utf8")); }
-  catch { return []; }
-}
-function saveHistory(h) {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(h, null, 2));
-}
 function mediaUrlForId(id) {
   for (const ext of ["mp3", "webm"]) {
     if (fs.existsSync(path.join(MEDIA_DIR, `${id}.${ext}`))) return `/media/${id}.${ext}`;
@@ -134,32 +209,25 @@ ${JSON.stringify(candidates, null, 2)}`;
 
 // ── /retopics — regenerate topics for a history entry ────────────────────────
 app.post("/retopics/:id", async (req, res) => {
-  const entry = loadHistory().find(e => e.id === req.params.id);
+  const entry = dbGetById(req.params.id);
   if (!entry) return res.status(404).json({ error: "Entry not found" });
   const utterances = entry.result?.results?.utterances || [];
   const topics = await extractTopics(utterances);
-  const h = loadHistory().map(e => e.id === req.params.id ? { ...e, topics } : e);
-  saveHistory(h);
+  dbUpdateTopics(req.params.id, topics);
   res.json({ topics });
 });
 
 // ── History endpoints ─────────────────────────────────────────────────────────
 app.get("/history", (req, res) => {
-  const h = loadHistory().map(e => ({ ...e, mediaUrl: mediaUrlForId(e.id) }));
-  res.json(h);
+  res.json(dbGetAll().map(e => ({ ...e, mediaUrl: mediaUrlForId(e.id) })));
 });
 app.patch("/history/:id/speakers", (req, res) => {
-  const { speakerNames } = req.body;
-  const h = loadHistory().map(e =>
-    e.id === req.params.id ? { ...e, speakerNames: speakerNames === null ? {} : { ...(e.speakerNames || {}), ...speakerNames } } : e
-  );
-  saveHistory(h);
+  dbUpdateSpeakerNames(req.params.id, req.body.speakerNames);
   res.json({ ok: true });
 });
-
 app.delete("/history/:id", (req, res) => {
-  const id = req.params.id;
-  saveHistory(loadHistory().filter(e => e.id !== id));
+  const { id } = req.params;
+  dbDeleteById(id);
   for (const ext of ["mp3", "webm"]) {
     const p = path.join(MEDIA_DIR, `${id}.${ext}`);
     if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -168,7 +236,7 @@ app.delete("/history/:id", (req, res) => {
 });
 app.delete("/history", (req, res) => {
   for (const f of fs.readdirSync(MEDIA_DIR)) fs.unlinkSync(path.join(MEDIA_DIR, f));
-  saveHistory([]);
+  dbDeleteAll();
   res.json({ ok: true });
 });
 
@@ -225,7 +293,7 @@ app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), as
       }
     },
   };
-  const h = loadHistory(); h.unshift(entry); saveHistory(h);
+  dbInsert(entry);
   res.json({ id, mediaUrl: mediaUrlForId(id) });
 });
 
@@ -276,7 +344,7 @@ app.post("/transcribe-url", async (req, res) => {
     const topics = await extractTopics(result.results?.utterances || []);
     const ytId = getYouTubeId(url) || null;
     const entry = { id: Date.now().toString(), filename: title, createdAt: new Date().toISOString(), ytId, sourceUrl: url, result, topics };
-    const h = loadHistory(); h.unshift(entry); saveHistory(h);
+    dbInsert(entry);
     res.json({ ...result, _historyId: entry.id, _title: title, _ytId: ytId, _topics: topics });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -305,7 +373,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
 
     const topics = await extractTopics(result.results?.utterances || []);
     const entry = { id, filename: req.file.originalname, createdAt: new Date().toISOString(), ytId: null, sourceUrl: null, result, topics };
-    const h = loadHistory(); h.unshift(entry); saveHistory(h);
+    dbInsert(entry);
     res.json({ ...result, _historyId: id, mediaUrl: `/media/${id}.mp3`, _topics: topics });
   } catch (err) {
     if (fs.existsSync(savedAudioPath)) fs.unlinkSync(savedAudioPath);
