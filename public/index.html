@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transcriber</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header>
+  <h1>Transcriber</h1>
+  <div id="api-key-row">
+    <input type="password" id="api-key" placeholder="Deepgram API key" />
+  </div>
+</header>
+
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <span>History</span>
+      <button id="btn-clear-all">Clear all</button>
+    </div>
+    <div id="history-list">
+      <div id="history-empty">No transcripts yet</div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="content">
+      <div class="card">
+        <div class="tabs">
+          <button class="tab active" data-tab="upload">File upload</button>
+          <button class="tab" data-tab="live">Live mic</button>
+        </div>
+
+        <div id="panel-upload">
+          <div class="url-row">
+            <input type="url" id="url-input" placeholder="YouTube, podcast, or any URL yt-dlp supports…" />
+            <button id="btn-url">Transcribe URL</button>
+          </div>
+          <div class="divider">
+            <div class="divider-line"></div>
+            <span>or upload a file</span>
+            <div class="divider-line"></div>
+          </div>
+          <div id="drop-zone">
+            <div class="drop-icon">🎤</div>
+            <p>Drop an audio or video file here, or click to browse</p>
+            <p class="drop-sub">MP3, MP4, MOV, WAV, M4A, FLAC, OGG, MKV — up to 2 GB</p>
+            <input type="file" id="file-input" accept="audio/*,video/*" />
+          </div>
+          <div id="progress-wrap" style="display:none;">
+            <progress id="upload-progress" value="0" max="100"></progress>
+            <p id="status"></p>
+          </div>
+        </div>
+
+        <div id="panel-live" style="display:none;">
+          <div id="live-controls">
+            <button id="record-btn">&#x25CF; Start recording</button>
+            <label class="mode-toggle">
+              <input type="checkbox" id="chk-system-audio" />
+              Capture system audio
+            </label>
+            <span id="live-status"></span>
+          </div>
+          <canvas id="level-meter" height="32" style="display:none;width:100%;border-radius:6px;margin-top:0.75rem;"></canvas>
+          <div id="live-transcript"></div>
+          <span id="live-interim"></span>
+        </div>
+      </div>
+
+      <div id="results">
+        <div class="card" id="summary-card" style="display:none;">
+          <div class="summary-box">
+            <strong>Summary</strong>
+            <span id="summary-text"></span>
+          </div>
+        </div>
+        <div id="results-body">
+          <div class="card" id="media-wrapper" style="display:none;">
+            <div class="media-header">
+              <p class="player-label" id="media-label">Playback</p>
+              <button id="btn-reattach" style="display:none;">Re-attach file</button>
+              <input type="file" id="reattach-input" accept="audio/*,video/*" style="display:none;" />
+            </div>
+            <video id="media-player" controls></video>
+            <div id="yt-container"><div id="yt-player"></div></div>
+            <p id="history-notice">Re-attach the original file to enable playback</p>
+          </div>
+          <div class="card">
+            <div id="timeline"></div>
+            <div class="toolbar">
+              <button id="btn-copy">Copy text</button>
+              <button id="btn-txt">Download .txt</button>
+              <label class="autoscroll-label">
+                <input type="checkbox" id="chk-autoscroll" checked />
+                Auto-scroll
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Topics card — full width below results-body -->
+        <div class="card" id="topics-card" style="display:none;">
+          <div class="topics-header">
+            <span class="topics-title">Interesting moments</span>
+            <span id="topics-loading" style="display:none;" class="topics-loading">Analyzing…</span>
+            <button id="btn-refresh-topics" style="display:none;margin-left:auto;font-size:12px;padding:3px 10px;border-radius:6px;border:0.5px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;">Refresh</button>
+          </div>
+          <div id="topics-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>

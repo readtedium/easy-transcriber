@@ -1,0 +1,14 @@
+{
+  "name": "transcriber",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "@deepgram/sdk": "^3",
+    "cors": "^2",
+    "express": "^4",
+    "multer": "^1",
+    "ws": "^8"
+  }
+}

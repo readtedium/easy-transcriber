@@ -1,0 +1,14 @@
+services:
+  transcriber:
+    build: .
+    env_file: ".env"
+    ports:
+      - ${SERVER_PORT:-3435}:3000
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - ./uploads:/app/uploads
+      - ./media:/app/media
+      - ./history.json:/app/history.json
+    restart: unless-stopped
