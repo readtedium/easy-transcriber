@@ -35,7 +35,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 ```bash
 # 1. Clone and enter the repo
 git clone https://github.com/readtedium/easy-transcriber
-cd transcriber
+cd easy-transcriber
 
 # 2. Create your .env
 cp .env.example .env
@@ -60,6 +60,8 @@ Copy `.env.example` to `.env`:
 DEEPGRAM_API_KEY=   # Required for transcription
 DEEPSEEK_API_KEY=   # Optional — enables "Interesting Moments" topic extraction
 SERVER_PORT=3000    # Port to expose on the host (default: 3000)
+LOGIN_PASSWORD=     # Optional — enables password protection
+SESSION_SECRET=     # Recommended when LOGIN_PASSWORD is set; random string
 ```
 
 ## Usage
@@ -91,7 +93,29 @@ When a `DEEPSEEK_API_KEY` is set, Transcriber automatically analyzes each transc
 
 > **Note:** Docker is the easier path and avoids the setup below. Consider it first.
 
-You'll need Node.js 20+, `ffmpeg`, `yt-dlp`, and native build tools for `better-sqlite3`:
+You'll need Node.js 20+, `ffmpeg`, `yt-dlp`, and native build tools for `better-sqlite3`.
+
+**ffmpeg**
+
+| Platform | Command |
+|----------|---------|
+| macOS | `brew install ffmpeg` |
+| Ubuntu/Debian | `sudo apt install ffmpeg` |
+| Fedora | `sudo dnf install ffmpeg` |
+| Arch | `sudo pacman -S ffmpeg` |
+| Windows | [ffmpeg.org/download](https://ffmpeg.org/download.html) or `winget install ffmpeg` |
+
+**yt-dlp** (required for URL transcription)
+
+| Platform | Command |
+|----------|---------|
+| macOS | `brew install yt-dlp` |
+| Ubuntu/Debian | `sudo apt install yt-dlp` or `pip install yt-dlp` |
+| Fedora | `sudo dnf install yt-dlp` or `pip install yt-dlp` |
+| Arch | `sudo pacman -S yt-dlp` |
+| Windows | `winget install yt-dlp` or `pip install yt-dlp` |
+
+**Native build tools** (for `better-sqlite3`):
 
 - **macOS**: `xcode-select --install`
 - **Ubuntu/Debian**: `sudo apt install build-essential python3-dev`
@@ -110,7 +134,7 @@ node server.js
 
 ## Notes
 
-- No authentication — intended for single-user self-hosted use. Do not expose to the public internet without adding auth.
+- **Authentication is optional.** Set `LOGIN_PASSWORD` in `.env` to enable a password-protected login page. Sessions last 7 days. Set `SESSION_SECRET` to a random string to keep sessions valid across restarts; if omitted, a new secret is generated each restart (logging everyone out). Generate one with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. For exposing to the internet, [Tailscale](https://tailscale.com) or Cloudflare Access are stronger alternatives with no login-page attack surface.
 - Transcript history is stored in a SQLite database (`transcripts.db`). The `media/` directory holds saved audio files. Both are mounted as Docker volumes so data persists across restarts. If upgrading from an older version, `history.json` will be automatically migrated on first boot.
 - URL transcriptions are not saved to `media/` (audio is downloaded, transcribed, then deleted).
 

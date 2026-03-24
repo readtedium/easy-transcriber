@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
@@ -5,6 +6,9 @@ import { createClient } from "@deepgram/sdk";
 import Database from "better-sqlite3";
 import multer from "multer";
 import cors from "cors";
+import session from "express-session";
+import rateLimit from "express-rate-limit";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
@@ -16,6 +20,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MEDIA_DIR = path.join(__dirname, "media");
 
 if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR);
+
+// ── Check external tools ───────────────────────────────────────────────────────
+for (const tool of ["ffmpeg", "yt-dlp"]) {
+  execFile(tool, ["--version"], err => {
+    if (err?.code === "ENOENT") console.warn(`Warning: ${tool} not found — install it or some features will not work.`);
+  });
+}
 
 // ── Database ──────────────────────────────────────────────────────────────────
 const DB_DIR = path.join(__dirname, "data");
@@ -100,14 +111,118 @@ function dbUpdateSpeakerNames(id, speakerNames) {
   }
 })();
 
+const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Easy Transcriber</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #f9f9f8; --surface: #ffffff; --border: rgba(0,0,0,0.1);
+      --text: #1a1a18; --accent: #4a3fc7; --accent-light: #eeecfe;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1a1a18; --surface: #242422; --border: rgba(255,255,255,0.12);
+        --text: #f0efe8; --accent: #8f88e8; --accent-light: #26215c;
+      }
+    }
+    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: var(--surface); border-radius: 12px; padding: 2rem; width: 100%; max-width: 340px;
+            box-shadow: 0 2px 16px rgba(0,0,0,.08); }
+    h1 { font-size: 1.1rem; font-weight: 500; margin-bottom: 1.5rem; }
+    input[type=password] { width: 100%; padding: .6rem .8rem; border: 0.5px solid var(--border);
+                           border-radius: 8px; font-size: 15px; margin-bottom: 1rem; outline: none;
+                           background: var(--bg); color: var(--text); }
+    input[type=password]:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-light); }
+    button { width: 100%; padding: .65rem; background: var(--accent); color: #fff; border: none;
+             border-radius: 8px; font-size: 15px; cursor: pointer; }
+    button:hover { opacity: 0.9; }
+    .error { color: #f87171; font-size: 13px; margin-top: .75rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Easy Transcriber</h1>
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password"/>
+      <button type="submit">Log in</button>
+      {{ERROR}}
+    </form>
+  </div>
+</body>
+</html>`;
+
 const app = express();
 const server = createServer({ maxHeaderSize: 32768 }, app);
-const wss = new WebSocketServer({ server, path: "/live" });
+const wss = new WebSocketServer({ noServer: true });
 
 app.use(cors());
 app.use(express.json());
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+const sessionMiddleware = session({
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex"),
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: "strict", maxAge: 7 * 24 * 60 * 60 * 1000 },
+});
+app.use(sessionMiddleware);
+
+function requireAuth(req, res, next) {
+  if (!process.env.LOGIN_PASSWORD) return next();
+  if (req.session?.authed) return next();
+  if (req.path === "/login" || req.path === "/logout" || req.path === "/auth") return next();
+  // API calls get 401; browser navigations get redirected to login
+  if (req.method !== "GET" || req.path.startsWith("/history") || req.path.startsWith("/media") || req.path.startsWith("/retopics")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  res.redirect(`/login?next=${encodeURIComponent(req.originalUrl)}`);
+}
+app.use(requireAuth);
+
+if (process.env.LOGIN_PASSWORD) {
+  console.log("Password protection enabled.");
+} else {
+  console.log("Warning: No LOGIN_PASSWORD set — running without authentication.");
+}
+
+// Static files — served only after auth check
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/media", express.static(MEDIA_DIR));
+
+// ── Login / logout routes ─────────────────────────────────────────────────────
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 10, skipSuccessfulRequests: true,
+  standardHeaders: true, legacyHeaders: false,
+  handler: (_req, res) => res.status(429).send(LOGIN_HTML.replace("{{ERROR}}", '<p class="error">Too many attempts. Try again in 15 minutes.</p>')),
+});
+
+app.get("/auth", (req, res) => res.json({ enabled: !!process.env.LOGIN_PASSWORD }));
+
+app.get("/login", (req, res) => {
+  if (!process.env.LOGIN_PASSWORD || req.session?.authed) return res.redirect("/");
+  res.send(LOGIN_HTML.replace("{{ERROR}}", ""));
+});
+app.post("/login", express.urlencoded({ extended: false }), loginLimiter, (req, res) => {
+  const pwd = process.env.LOGIN_PASSWORD;
+  if (!pwd) return res.redirect("/");
+  const supplied = Buffer.from(req.body.password || "");
+  const expected = Buffer.from(pwd);
+  const ok = supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  if (ok) {
+    req.session.authed = true;
+    const next = req.query.next || "/";
+    return res.redirect(/^\/(?!\/)/.test(next) ? next : "/");
+  }
+  res.status(401).send(LOGIN_HTML.replace("{{ERROR}}", '<p class="error">Incorrect password.</p>'));
+});
+app.get("/logout", (req, res) => {
+  req.session.destroy(() => res.redirect("/login"));
+});
 
 const upload = multer({ dest: "uploads/", limits: { fileSize: 2048 * 1024 * 1024 } });
 const VIDEO_TYPES = new Set(["video/mp4","video/quicktime","video/x-msvideo","video/webm","video/mkv","video/x-matroska"]);
@@ -354,7 +469,10 @@ app.post("/transcribe-url", async (req, res) => {
     dbInsert(entry);
     res.json({ ...result, _historyId: entry.id, _title: title, _ytId: ytId, _topics: topics });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err.code === "ENOENT"
+      ? "yt-dlp is not installed. Install it to use URL transcription."
+      : err.message;
+    res.status(err.code === "ENOENT" ? 503 : 500).json({ error: msg });
   } finally {
     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
   }
@@ -432,5 +550,18 @@ wss.on("connection", (clientWs, req) => {
   })();
 });
 
-const PORT = process.env.PORT || 3000;
+// ── WebSocket upgrade (with auth) ─────────────────────────────────────────────
+server.on("upgrade", (req, socket, head) => {
+  if (!req.url.startsWith("/live")) { socket.destroy(); return; }
+  sessionMiddleware(req, { end: () => {}, getHeader: () => {}, setHeader: () => {} }, () => {
+    if (process.env.LOGIN_PASSWORD && !req.session?.authed) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+  });
+});
+
+const PORT = process.env.SERVER_PORT || 3000;
 server.listen(PORT, () => console.log(`Transcriber running on http://localhost:${PORT}`));

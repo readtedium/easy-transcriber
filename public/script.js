@@ -35,6 +35,11 @@ function expandUploadCard() {
   $("upload-card-bar").style.display = "none";
 }
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+fetch("/auth").then(r => r.json()).then(d => {
+  if (d.enabled) $("logout-link").style.display = "";
+}).catch(() => {});
+
 // ── API key ───────────────────────────────────────────────────────────────────
 const savedKey = localStorage.getItem("dg_key");
 if (savedKey) $("api-key").value = savedKey;

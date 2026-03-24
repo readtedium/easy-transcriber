@@ -8,10 +8,13 @@
   },
   "dependencies": {
     "@deepgram/sdk": "^3",
+    "dotenv": "^16",
     "better-sqlite3": "^12.8.0",
     "cors": "^2",
     "express": "^4",
-    "multer": "^1",
+    "express-rate-limit": "^7",
+    "express-session": "^1",
+    "multer": "^2",
     "ws": "^8"
   }
 }
