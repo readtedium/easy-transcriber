@@ -1,4 +1,4 @@
-# Transcriber
+# Easy Transcriber
 
 A self-hosted transcription web app powered by [Deepgram Nova-3](https://deepgram.com). Transcribe audio/video files, YouTube and podcast URLs, or live microphone input — all from a browser. Runs in Docker.
 
