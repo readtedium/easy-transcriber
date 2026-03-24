@@ -140,7 +140,9 @@ node server.js
 
 ## Roadmap
 
-- Add authentication
+- Look into additional transcription engines (Whisper, Moonshine Voice)
+- Add alternatives to DeepSeek (Claude, Ollama, ChatGPT)
+- Download YouTube closed captions as a fallback option
 
 ## License
 
