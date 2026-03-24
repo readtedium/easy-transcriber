@@ -8,6 +8,8 @@ Built with the help of Claude over an evening, this is designed as a minimal alt
 
 Not sure if this is for you? Feel free to kick the tires—Deepgram offers new users $200 of free usage for testing, which will cover about 50 hours of recording. If you choose to add [DeepSeek](https://www.deepseek.com/), the cost is likewise minimal.
 
+(NOTE: Deepgram is pretty solid, but like every other audio-to-text tool, not perfect. Double-check your work. It might miss something important.)
+
 ## Features
 
 - **File upload** — MP3, MP4, MOV, WAV, M4A, FLAC, OGG, MKV up to 2 GB
