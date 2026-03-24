@@ -21,6 +21,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 - **Dual-stream mode** — capture mic and system audio simultaneously as separate speakers
 - **Interesting moments** — AI-powered topic extraction highlights the best moments (optional, requires DeepSeek key)
 - **Transcript history** — sidebar with playback sync; click any word to jump to that moment
+- **Custom speaker names** — Speakers can be edited by hand and selected from a list of prior speakers; transcriptions can also be reset as needed.
 - **Export** — copy to clipboard or download as `.txt`
 - **Light/dark mode**
 
@@ -107,7 +108,6 @@ node server.js
 ## Roadmap
 
 - Move setup to SQLite database
-- Set up custom speaker names
 - Add authentication
 
 ## License
