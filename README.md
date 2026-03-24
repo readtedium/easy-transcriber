@@ -1,5 +1,7 @@
 # Easy Transcriber
 
+![Easy Transcriber Screenshot](easy_transcriber_screenshot.jpg)
+
 A self-hosted transcription web app powered by [Deepgram Nova-3](https://deepgram.com). Transcribe audio/video files, YouTube and podcast URLs, or live microphone input, all via a browser. Runs in Docker, intended for local hosting.
 
 Built with the help of Claude over an evening, this is designed as a minimal alternative to Krisp or Otter.ai that costs pennies on the dollar and doesn’t force you into storing video recordings onto limited cloud storage. This also doesn’t tax the GPU as it’s running via an API. (If you’re a journalist, you might find this tool super-useful.)
