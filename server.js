@@ -148,6 +148,15 @@ app.get("/history", (req, res) => {
   const h = loadHistory().map(e => ({ ...e, mediaUrl: mediaUrlForId(e.id) }));
   res.json(h);
 });
+app.patch("/history/:id/speakers", (req, res) => {
+  const { speakerNames } = req.body;
+  const h = loadHistory().map(e =>
+    e.id === req.params.id ? { ...e, speakerNames: speakerNames === null ? {} : { ...(e.speakerNames || {}), ...speakerNames } } : e
+  );
+  saveHistory(h);
+  res.json({ ok: true });
+});
+
 app.delete("/history/:id", (req, res) => {
   const id = req.params.id;
   saveHistory(loadHistory().filter(e => e.id !== id));

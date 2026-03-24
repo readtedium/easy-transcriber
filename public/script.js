@@ -12,6 +12,18 @@ const AUDIO_EXTS = /\.(mp3|m4a|flac|ogg|wav|webm|aac)$/i;
 
 let player = $("media-player");
 let currentHistoryId = null;
+let currentSpeakerNames = {};
+
+function speakerLabel(idx) {
+  return currentSpeakerNames[idx] ?? `Speaker ${idx + 1}`;
+}
+function getNameBank() {
+  try { return JSON.parse(localStorage.getItem("speakerNameBank") || "[]"); } catch { return []; }
+}
+function addToNameBank(name) {
+  const bank = getNameBank();
+  if (name && !bank.includes(name)) { bank.unshift(name); localStorage.setItem("speakerNameBank", JSON.stringify(bank.slice(0, 50))); }
+}
 
 // ── API key ───────────────────────────────────────────────────────────────────
 const savedKey = localStorage.getItem("dg_key");
@@ -219,6 +231,7 @@ async function handleUrl() {
 
 // ── Render result ─────────────────────────────────────────────────────────────
 function renderResult(result, fromHistory = false, ytId = null) {
+  currentSpeakerNames = result._speakerNames || {};
   const ch = result?.results?.channels?.[0];
   const utterances = result?.results?.utterances || [];
   const summary = result?.results?.summary?.short;
@@ -242,7 +255,7 @@ function renderResult(result, fromHistory = false, ytId = null) {
     const div = document.createElement("div");
     div.className = "utterance";
     div.dataset.start = utt.start;
-    div.innerHTML = `<span class="utt-time">${fmtTime(utt.start)}</span><span class="utt-speaker" style="background:${bg};color:${fg}">Speaker ${(utt.speaker??0)+1}</span><span class="utt-text">${utt.transcript}</span>`;
+    div.innerHTML = `<span class="utt-time">${fmtTime(utt.start)}</span><span class="utt-speaker" data-speaker="${utt.speaker??0}" style="background:${bg};color:${fg}">${speakerLabel(utt.speaker??0)}</span><span class="utt-text">${utt.transcript}</span>`;
     div.addEventListener("click", () => {
       if (ytId) seekYouTube(utt.start);
       else if (player.src && player.src !== window.location.href) { player.currentTime = utt.start; player.play(); }
@@ -251,6 +264,8 @@ function renderResult(result, fromHistory = false, ytId = null) {
     });
     $("timeline").appendChild(div);
   });
+
+  wireRenameBadges();
 
   if (!fromHistory) {
     if (!ytId) wirePlayerSync();
@@ -269,16 +284,33 @@ function renderResult(result, fromHistory = false, ytId = null) {
   renderTopics(result._topics || null, ytId, result._historyId || currentHistoryId || null);
 
   $("btn-copy").onclick = () => {
-    navigator.clipboard.writeText(items.map(u => `[${fmtTime(u.start)}] Speaker ${(u.speaker??0)+1}: ${u.transcript}`).join("\n"));
+    navigator.clipboard.writeText(items.map(u => `[${fmtTime(u.start)}] ${speakerLabel(u.speaker??0)}: ${u.transcript}`).join("\n"));
     $("btn-copy").textContent = "Copied!";
     setTimeout(() => $("btn-copy").textContent = "Copy text", 2000);
   };
   $("btn-txt").onclick = () => {
     const lines = summary ? [`SUMMARY\n${summary}\n\n---\n`] : [];
-    lines.push(...items.map(u => `[${fmtTime(u.start)}] Speaker ${(u.speaker??0)+1}: ${u.transcript}`));
+    lines.push(...items.map(u => `[${fmtTime(u.start)}] ${speakerLabel(u.speaker??0)}: ${u.transcript}`));
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
     a.download = "transcript.txt"; a.click();
+  };
+
+  const resetBtn = $("btn-reset-names");
+  resetBtn.style.display = Object.keys(currentSpeakerNames).length ? "" : "none";
+  resetBtn.onclick = () => {
+    currentSpeakerNames = {};
+    document.querySelectorAll(".utt-speaker[data-speaker]").forEach(b => {
+      b.textContent = speakerLabel(parseInt(b.dataset.speaker, 10));
+    });
+    resetBtn.style.display = "none";
+    if (currentHistoryId) {
+      fetch(`/history/${currentHistoryId}/speakers`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speakerNames: null }),
+      });
+    }
   };
 }
 
@@ -356,6 +388,109 @@ function renderTopics(topics, ytId = null, historyId = null) {
 }
 
 
+// ── Speaker renaming ──────────────────────────────────────────────────────────
+function wireRenameBadges() {
+  document.querySelectorAll(".utt-speaker").forEach(badge => {
+    badge.style.cursor = "pointer";
+    badge.title = "Click to rename";
+    badge.addEventListener("click", () => {
+      if (badge.querySelector("input")) return; // already editing
+
+      const speakerIdx = parseInt(badge.dataset.speaker, 10);
+      const currentName = currentSpeakerNames[speakerIdx] ?? "";
+      const fg = badge.style.color;
+
+      const input = document.createElement("input");
+      input.value = currentName;
+      input.style.cssText = `background:transparent;border:none;outline:none;color:${fg};font:inherit;width:${Math.max(120, currentName.length * 9 + 20)}px;padding:0;`;
+      badge.textContent = "";
+      badge.appendChild(input);
+      input.focus();
+      input.select();
+
+      // Custom dropdown — shows all bank names, filters as you type
+      let dropdown = null;
+
+      function removeDropdown() { dropdown?.remove(); dropdown = null; }
+
+      function showDropdown(filter = "") {
+        removeDropdown();
+        const bank = getNameBank();
+        const matches = filter ? bank.filter(n => n.toLowerCase().includes(filter.toLowerCase())) : [...bank];
+        if (!matches.length) return;
+
+        dropdown = document.createElement("div");
+        dropdown.className = "speaker-name-dropdown";
+        const rect = badge.getBoundingClientRect();
+        dropdown.style.cssText = `position:fixed;top:${rect.bottom + 3}px;left:${rect.left}px;z-index:9999;min-width:${Math.max(rect.width, 100)}px;`;
+        matches.forEach(name => {
+          const item = document.createElement("div");
+          item.className = "speaker-name-option";
+          item.addEventListener("mouseover", () => item.classList.add("hover"));
+          item.addEventListener("mouseout", () => item.classList.remove("hover"));
+
+          const label = document.createElement("span");
+          label.textContent = name;
+          label.addEventListener("mousedown", e => {
+            e.preventDefault();
+            input.value = name;
+            removeDropdown();
+            doCommit();
+          });
+
+          const del = document.createElement("button");
+          del.className = "speaker-name-delete";
+          del.textContent = "✕";
+          del.title = "Remove from suggestions";
+          del.addEventListener("mousedown", e => {
+            e.preventDefault();
+            const bank = getNameBank().filter(n => n !== name);
+            localStorage.setItem("speakerNameBank", JSON.stringify(bank));
+            if (input.value.trim() === name) input.value = "";
+            showDropdown(input.value);
+          });
+
+          item.appendChild(label);
+          item.appendChild(del);
+          dropdown.appendChild(item);
+        });
+        document.body.appendChild(dropdown);
+      }
+
+      if (getNameBank().length) showDropdown();
+      input.addEventListener("input", () => showDropdown(input.value));
+
+      let done = false;
+      function doCommit() {
+        if (done) return;
+        done = true;
+        removeDropdown();
+        const name = input.value.trim();
+        if (name) {
+          currentSpeakerNames[speakerIdx] = name;
+          addToNameBank(name);
+        } else {
+          delete currentSpeakerNames[speakerIdx];
+        }
+        $("btn-reset-names").style.display = Object.keys(currentSpeakerNames).length ? "" : "none";
+        document.querySelectorAll(`.utt-speaker[data-speaker="${speakerIdx}"]`).forEach(b => {
+          b.textContent = speakerLabel(speakerIdx);
+        });
+        if (currentHistoryId) {
+          fetch(`/history/${currentHistoryId}/speakers`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ speakerNames: { [speakerIdx]: name || null } }),
+          });
+        }
+      }
+
+      input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); input.blur(); } });
+      input.addEventListener("blur", doCommit, { once: true });
+    });
+  });
+}
+
 $("btn-reattach").addEventListener("click", () => $("reattach-input").click());
 $("reattach-input").addEventListener("change", () => {
   const file = $("reattach-input").files[0];
@@ -427,7 +562,7 @@ async function loadHistorySidebar() {
         $("history-notice").style.display = "";
       }
 
-      renderResult({ ...entry.result, _ytId: entry.ytId || null, _topics: entry.topics || null, _historyId: entry.id }, true, null);
+      renderResult({ ...entry.result, _ytId: entry.ytId || null, _topics: entry.topics || null, _historyId: entry.id, _speakerNames: entry.speakerNames || {} }, true, null);
     });
     div.querySelector(".hist-del").addEventListener("click", async () => {
       await fetch(`/history/${entry.id}`, { method: "DELETE" });
