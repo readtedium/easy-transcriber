@@ -237,9 +237,24 @@ progress { width: 100%; height: 4px; border-radius: 2px; display: block; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #e24b4a; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
+/* ── Upload card collapse ────────────────────────────────────────────────────── */
+#upload-card.collapsed > *:not(#upload-card-bar) { display: none !important; }
+#upload-card.collapsed { padding: 0; }
+#upload-card-bar { padding: 0.5rem 1rem; }
+#btn-new-transcription { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 0.9rem; padding: 0; }
+#btn-new-transcription:hover { text-decoration: underline; }
+
 /* ── Results ─────────────────────────────────────────────────────────────────── */
 #results { display: none; flex-direction: column; gap: 1.5rem; }
 #results.show { display: flex; }
+#transcript-title {
+  font-size: 1.05rem; font-weight: 600; color: var(--text);
+  cursor: text; border-radius: 4px; padding: 2px 6px; outline: none;
+  min-height: 1.4em; word-break: break-word;
+}
+#transcript-title:empty::before { content: attr(data-placeholder); color: var(--muted); }
+#transcript-title:hover { background: var(--accent-light); }
+#transcript-title:focus { background: var(--accent-light); box-shadow: 0 0 0 2px var(--accent); }
 #results-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; align-items: start; }
 @media (max-width: 900px) { #results-body { grid-template-columns: 1fr; } }
 

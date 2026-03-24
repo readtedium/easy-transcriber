@@ -56,6 +56,7 @@ const stmts = {
   setTopics: db.prepare("UPDATE history SET topics = ? WHERE id = ?"),
   getSpeakerNames: db.prepare("SELECT speaker_names FROM history WHERE id = ?"),
   setSpeakerNames: db.prepare("UPDATE history SET speaker_names = ? WHERE id = ?"),
+  updateFilename:  db.prepare("UPDATE history SET filename = ? WHERE id = ?"),
 };
 
 function dbGetAll()    { return stmts.getAll.all().map(rowToEntry); }
@@ -221,6 +222,12 @@ app.post("/retopics/:id", async (req, res) => {
 app.get("/history", (req, res) => {
   res.json(dbGetAll().map(e => ({ ...e, mediaUrl: mediaUrlForId(e.id) })));
 });
+app.patch("/history/:id/filename", express.json(), (req, res) => {
+  const { filename } = req.body;
+  if (!filename?.trim()) return res.status(400).json({ error: "empty" });
+  stmts.updateFilename.run(filename.trim(), req.params.id);
+  res.json({ ok: true });
+});
 app.patch("/history/:id/speakers", (req, res) => {
   dbUpdateSpeakerNames(req.params.id, req.body.speakerNames);
   res.json({ ok: true });
@@ -374,7 +381,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
     const topics = await extractTopics(result.results?.utterances || []);
     const entry = { id, filename: req.file.originalname, createdAt: new Date().toISOString(), ytId: null, sourceUrl: null, result, topics };
     dbInsert(entry);
-    res.json({ ...result, _historyId: id, mediaUrl: `/media/${id}.mp3`, _topics: topics });
+    res.json({ ...result, _historyId: id, _filename: req.file.originalname, mediaUrl: `/media/${id}.mp3`, _topics: topics });
   } catch (err) {
     if (fs.existsSync(savedAudioPath)) fs.unlinkSync(savedAudioPath);
     res.status(500).json({ error: err.message });

@@ -25,6 +25,16 @@ function addToNameBank(name) {
   if (name && !bank.includes(name)) { bank.unshift(name); localStorage.setItem("speakerNameBank", JSON.stringify(bank.slice(0, 50))); }
 }
 
+// ── Upload card collapse ──────────────────────────────────────────────────────
+function collapseUploadCard() {
+  $("upload-card").classList.add("collapsed");
+  $("upload-card-bar").style.display = "";
+}
+function expandUploadCard() {
+  $("upload-card").classList.remove("collapsed");
+  $("upload-card-bar").style.display = "none";
+}
+
 // ── API key ───────────────────────────────────────────────────────────────────
 const savedKey = localStorage.getItem("dg_key");
 if (savedKey) $("api-key").value = savedKey;
@@ -39,6 +49,8 @@ document.querySelectorAll(".tab").forEach(btn => {
     $("panel-live").style.display   = btn.dataset.tab === "live"   ? "" : "none";
   });
 });
+
+$("btn-new-transcription").addEventListener("click", expandUploadCard);
 
 // ── Player helper ─────────────────────────────────────────────────────────────
 function setPlayerSrc(src, isAudio = false) {
@@ -144,6 +156,7 @@ function handleFile(file) {
   $("btn-reattach").style.display = "none";
   $("media-label").textContent = isVideo ? "Video" : "Audio";
   $("results").classList.remove("show");
+  expandUploadCard();
   $("timeline").innerHTML = "";
   $("summary-card").style.display = "none";
   $("progress-wrap").style.display = "";
@@ -188,6 +201,7 @@ async function handleUrl() {
   const ytId = getYouTubeId(url);
 
   $("results").classList.remove("show");
+  expandUploadCard();
   $("timeline").innerHTML = "";
   $("summary-card").style.display = "none";
   $("progress-wrap").style.display = "";
@@ -278,7 +292,15 @@ function renderResult(result, fromHistory = false, ytId = null) {
   }
 
   $("results").classList.add("show");
+  collapseUploadCard();
   $("progress-wrap").style.display = "none";
+
+  // Set editable title
+  const title = result._filename || result._title || result._historyFilename || "";
+  const titleEl = $("transcript-title");
+  titleEl.textContent = title;
+  titleEl.dataset.historyId = result._historyId || currentHistoryId || "";
+  wireTitleEdit();
 
   // Render topics if present, hide if not
   renderTopics(result._topics || null, ytId, result._historyId || currentHistoryId || null);
@@ -387,6 +409,32 @@ function renderTopics(topics, ytId = null, historyId = null) {
   card.style.display = "";
 }
 
+
+// ── Title editing ─────────────────────────────────────────────────────────────
+function wireTitleEdit() {
+  const el = $("transcript-title");
+  // Remove old listeners by cloning
+  const fresh = el.cloneNode(true);
+  el.parentNode.replaceChild(fresh, el);
+  fresh.contentEditable = "true";
+  fresh.spellcheck = false;
+  fresh.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); fresh.blur(); }
+    if (e.key === "Escape") { fresh.blur(); }
+  });
+  fresh.addEventListener("blur", async () => {
+    const newName = fresh.textContent.trim();
+    const id = fresh.dataset.historyId;
+    if (!newName || !id) return;
+    await fetch(`/history/${id}/filename`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: newName }),
+    });
+    const sidebarEntry = document.querySelector(`.hist-name[data-id="${id}"]`);
+    if (sidebarEntry) sidebarEntry.textContent = newName;
+  });
+}
 
 // ── Speaker renaming ──────────────────────────────────────────────────────────
 function wireRenameBadges() {
@@ -527,7 +575,7 @@ async function loadHistorySidebar() {
     div.dataset.id = entry.id;
     div.innerHTML = `
       <div class="hist-meta">
-        <div class="hist-name" title="${entry.filename}">${entry.filename}</div>
+        <div class="hist-name" data-id="${entry.id}" title="${entry.filename}">${entry.filename}</div>
         <div class="hist-date">${fmtDate(entry.createdAt)}</div>
       </div>
       <button class="hist-del" title="Delete">✕</button>`;
@@ -562,11 +610,11 @@ async function loadHistorySidebar() {
         $("history-notice").style.display = "";
       }
 
-      renderResult({ ...entry.result, _ytId: entry.ytId || null, _topics: entry.topics || null, _historyId: entry.id, _speakerNames: entry.speakerNames || {} }, true, null);
+      renderResult({ ...entry.result, _ytId: entry.ytId || null, _topics: entry.topics || null, _historyId: entry.id, _speakerNames: entry.speakerNames || {}, _historyFilename: entry.filename }, true, null);
     });
     div.querySelector(".hist-del").addEventListener("click", async () => {
       await fetch(`/history/${entry.id}`, { method: "DELETE" });
-      if (currentHistoryId === entry.id) { $("results").classList.remove("show"); $("media-wrapper").style.display = "none"; }
+      if (currentHistoryId === entry.id) { $("results").classList.remove("show"); expandUploadCard(); $("media-wrapper").style.display = "none"; }
       loadHistorySidebar();
     });
     list.appendChild(div);
@@ -577,6 +625,7 @@ $("btn-clear-all").addEventListener("click", async () => {
   if (!confirm("Delete all transcript history?")) return;
   await fetch("/history", { method: "DELETE" });
   $("results").classList.remove("show");
+  expandUploadCard();
   $("media-wrapper").style.display = "none";
   currentHistoryId = null;
   loadHistorySidebar();

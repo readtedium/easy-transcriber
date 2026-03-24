@@ -27,7 +27,10 @@
 
   <div id="main">
     <div id="content">
-      <div class="card">
+      <div class="card" id="upload-card">
+        <div id="upload-card-bar" style="display:none;">
+          <button id="btn-new-transcription">＋ New transcription</button>
+        </div>
         <div class="tabs">
           <button class="tab active" data-tab="upload">File upload</button>
           <button class="tab" data-tab="live">Live mic</button>
@@ -75,6 +78,7 @@
       </div>
 
       <div id="results">
+        <div id="transcript-title"></div>
         <div class="card" id="summary-card" style="display:none;">
           <div class="summary-box">
             <strong>Summary</strong>
