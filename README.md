@@ -17,6 +17,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 - **URL transcription** — YouTube, podcasts, and anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports
 - **Live mic transcription** — real-time streaming with speaker diarization
     - Capable of detecting multiple speakers
+- **Keyterms support** — add up to 100 comma-separated keywords to the upload, allowing for accurate detection of proper nouns or jargon-laden terms
 - **Dual-stream mode** — capture mic and system audio simultaneously as separate speakers
 - **Interesting moments** — AI-powered topic extraction highlights the best moments (optional, requires DeepSeek key)
 - **Transcript history** — sidebar with playback sync; click any word to jump to that moment

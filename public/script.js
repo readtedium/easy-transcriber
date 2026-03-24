@@ -140,6 +140,8 @@ function handleFile(file) {
 
   const fd = new FormData();
   fd.append("audio", file);
+  const keyterms = $("keyterms").value.trim();
+  if (keyterms) fd.append("keyterms", keyterms);
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/transcribe");
   xhr.setRequestHeader("x-deepgram-key", key);
@@ -186,7 +188,7 @@ async function handleUrl() {
     const res = await fetch("/transcribe-url", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-deepgram-key": key },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, keyterms: $("keyterms").value.trim() }),
     });
     $("upload-progress").value = 90;
     if (!res.ok) { $("status").textContent = "Error: " + ((await res.json()).error || "Unknown"); return; }
@@ -574,9 +576,12 @@ async function startLive() {
   }
 
   // ── Mic WebSocket ──────────────────────────────────────────────────────────
+  const keytermParams = $("keyterms").value.trim().split(",")
+    .map(k => k.trim()).filter(Boolean)
+    .map(k => `&keyterm=${encodeURIComponent(k)}`).join("");
   const micUrl = dual
-    ? `${proto}://${location.host}/live?key=${encodeURIComponent(key)}&dual=1&source=mic`
-    : `${proto}://${location.host}/live?key=${encodeURIComponent(key)}`;
+    ? `${proto}://${location.host}/live?key=${encodeURIComponent(key)}&dual=1&source=mic${keytermParams}`
+    : `${proto}://${location.host}/live?key=${encodeURIComponent(key)}${keytermParams}`;
   wsLive = new WebSocket(micUrl);
   wsLive.binaryType = "arraybuffer";
 
@@ -595,7 +600,7 @@ async function startLive() {
 
   // ── System WebSocket (if dual) ─────────────────────────────────────────────
   if (sysStream) {
-    const sysUrl = `${proto}://${location.host}/live?key=${encodeURIComponent(key)}&dual=1&source=system`;
+    const sysUrl = `${proto}://${location.host}/live?key=${encodeURIComponent(key)}&dual=1&source=system${keytermParams}`;
     wsSystem = new WebSocket(sysUrl);
     wsSystem.binaryType = "arraybuffer";
 

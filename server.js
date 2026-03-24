@@ -220,6 +220,11 @@ app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), as
   res.json({ id, mediaUrl: mediaUrlForId(id) });
 });
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function parseKeyterms(val) {
+  return (val || "").split(",").map(k => k.trim()).filter(Boolean);
+}
+
 // ── Audio extraction ──────────────────────────────────────────────────────────
 async function extractAudio(inputPath, destPath) {
   await execFileAsync("ffmpeg", [
@@ -242,10 +247,11 @@ async function downloadFromUrl(url, outputDir) {
 
 // ── /transcribe-url ───────────────────────────────────────────────────────────
 app.post("/transcribe-url", async (req, res) => {
-  const { url } = req.body;
+  const { url, keyterms: keytermStr } = req.body;
   if (!url) return res.status(400).json({ error: "No URL provided" });
   const apiKey = req.headers["x-deepgram-key"] || process.env.DEEPGRAM_API_KEY;
   if (!apiKey) return res.status(401).json({ error: "Missing API key" });
+  const keyterms = parseKeyterms(keytermStr);
   let filePath = null;
   try {
     const { filePath: fp, title } = await downloadFromUrl(url, path.join(__dirname, "uploads"));
@@ -254,6 +260,7 @@ app.post("/transcribe-url", async (req, res) => {
     const { result, error } = await dg.listen.prerecorded.transcribeFile(fs.readFileSync(filePath), {
       model: "nova-3", smart_format: true, diarize: true,
       paragraphs: true, summarize: "v2", punctuate: true, utterances: true,
+      ...(keyterms.length && { keyterm: keyterms }),
     });
     if (error) return res.status(500).json({ error: error.message });
 
@@ -274,6 +281,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
   const apiKey = req.headers["x-deepgram-key"] || process.env.DEEPGRAM_API_KEY;
   if (!apiKey) return res.status(401).json({ error: "Missing API key" });
+  const keyterms = parseKeyterms(req.body.keyterms);
   const id = Date.now().toString();
   const savedAudioPath = path.join(MEDIA_DIR, `${id}.mp3`);
   try {
@@ -282,6 +290,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
     const { result, error } = await dg.listen.prerecorded.transcribeFile(fs.readFileSync(savedAudioPath), {
       model: "nova-3", smart_format: true, diarize: true,
       paragraphs: true, summarize: "v2", punctuate: true, utterances: true,
+      ...(keyterms.length && { keyterm: keyterms }),
     });
     if (error) return res.status(500).json({ error: error.message });
 
@@ -314,9 +323,11 @@ wss.on("connection", (clientWs, req) => {
   };
 
   const dg = createClient(apiKey);
+  const keyterms = params.getAll("keyterm").filter(Boolean);
   const dgOptions = {
     model: "nova-3", smart_format: true, diarize: true, punctuate: true,
     interim_results: true, utterance_end_ms: 1000, vad_events: true,
+    ...(keyterms.length && { keyterm: keyterms }),
   };
 
   (async () => {
