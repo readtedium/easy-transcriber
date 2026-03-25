@@ -1,5 +1,6 @@
 services:
   transcriber:
+    image: ghcr.io/readtedium/easy-transcriber:latest
     build: .
     env_file: ".env"
     ports:

@@ -32,19 +32,33 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 
 ## Setup
 
-```bash
-# 1. Clone and enter the repo
-git clone https://github.com/readtedium/easy-transcriber
-cd easy-transcriber
+**Quick start (no clone needed):**
 
-# 2. Create your .env
+```bash
+# 1. Create a project folder
+mkdir easy-transcriber && cd easy-transcriber
+
+# 2. Download the compose file and example env
+curl -O https://raw.githubusercontent.com/readtedium/easy-transcriber/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/readtedium/easy-transcriber/main/.env.example
 cp .env.example .env
 # Edit .env and set DEEPGRAM_API_KEY
 
 # 3. Initialize data directories
 mkdir -p media uploads data
 
-# 4. Build and start
+# 4. Start (pulls pre-built image automatically)
+docker compose up
+```
+
+**Or clone and build locally:**
+
+```bash
+git clone https://github.com/readtedium/easy-transcriber
+cd easy-transcriber
+cp .env.example .env
+# Edit .env and set DEEPGRAM_API_KEY
+mkdir -p media uploads data
 docker compose up --build
 ```
 
