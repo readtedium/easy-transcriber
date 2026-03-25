@@ -297,7 +297,7 @@ function renderResult(result, fromHistory = false, ytId = null) {
   }
 
   $("results").classList.add("show");
-  collapseUploadCard();
+  if (!isRecording) collapseUploadCard();
   $("progress-wrap").style.display = "none";
 
   // Set editable title
@@ -894,8 +894,20 @@ function stopLive() {
     fd.append("transcript", liveText);
     fd.append("duration", String(duration));
     fd.append("utterances", JSON.stringify(liveUtterances));
+
+    $("record-btn").innerHTML = `<span class="saving-status"><span class="spinner"></span> Saving…</span>`;
+    $("record-btn").disabled = true;
+    const onBeforeUnload = e => { e.preventDefault(); };
+    window.addEventListener("beforeunload", onBeforeUnload);
+
     fetch("/save-live", { method: "POST", body: fd })
-      .then(r => r.json()).then(() => loadHistorySidebar());
+      .then(r => r.json())
+      .then(() => loadHistorySidebar())
+      .finally(() => {
+        $("record-btn").disabled = false;
+        $("record-btn").innerHTML = "&#x25CF; Start recording";
+        window.removeEventListener("beforeunload", onBeforeUnload);
+      });
   }
 
   liveText = "";
