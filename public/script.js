@@ -36,8 +36,13 @@ function expandUploadCard() {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
+let serverHasKey = false;
 fetch("/auth").then(r => r.json()).then(d => {
   if (d.enabled) $("logout-link").style.display = "";
+  if (d.hasDeepgramKey) {
+    serverHasKey = true;
+    $("api-key-row").style.display = "none";
+  }
 }).catch(() => {});
 
 // ── API key ───────────────────────────────────────────────────────────────────
@@ -724,7 +729,7 @@ function openDgSocket(key, source) {
 
 async function startLive() {
   const key = $("api-key").value.trim();
-  if (!key) { alert("Enter your Deepgram API key first."); return; }
+  if (!key && !serverHasKey) { alert("Enter your Deepgram API key first."); return; }
 
   const audioSource = $("audio-source").value; // "mic" | "sys" | "both"
   const useMic = audioSource !== "sys";

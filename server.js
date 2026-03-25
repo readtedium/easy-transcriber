@@ -205,7 +205,7 @@ const loginLimiter = rateLimit({
   handler: (_req, res) => res.status(429).send(LOGIN_HTML.replace("{{ERROR}}", '<p class="error">Too many attempts. Try again in 15 minutes.</p>')),
 });
 
-app.get("/auth", (req, res) => res.json({ enabled: !!process.env.LOGIN_PASSWORD }));
+app.get("/auth", (req, res) => res.json({ enabled: !!process.env.LOGIN_PASSWORD, hasDeepgramKey: !!process.env.DEEPGRAM_API_KEY }));
 
 app.get("/login", (req, res) => {
   if (!process.env.LOGIN_PASSWORD || req.session?.authed) return res.redirect("/");
