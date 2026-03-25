@@ -4,10 +4,10 @@ A self-hosted transcription web app powered by Deepgram's Nova-3 model. Supports
 
 ## Stack
 
-- **Backend**: Node.js (ESM), Express, ws (WebSocket), @deepgram/sdk, multer, ffmpeg, yt-dlp
+- **Backend**: Node.js (ESM), Express, ws (WebSocket), @deepgram/sdk, better-sqlite3, multer, ffmpeg, yt-dlp
 - **Frontend**: Vanilla JS (`script.js`), CSS (`styles.css`), HTML (`index.html`) — no build step
 - **AI**: Deepgram Nova-3 (transcription + diarization), DeepSeek (topic extraction)
-- **Storage**: `history.json` (flat file, SQLite migration planned), `media/` directory for audio files
+- **Storage**: SQLite (`data/transcripts.db`), `media/` directory for audio files
 - **Infrastructure**: Docker + docker-compose
 
 ## Project Structure
@@ -21,10 +21,11 @@ transcriber/
 │   └── styles.css         # All styles, CSS variables for light/dark mode
 ├── media/                 # Saved audio files, keyed by history entry ID
 ├── uploads/               # Multer temp dir, files deleted after processing
-├── history.json           # Transcript history, array of entry objects
+├── data/
+│   └── transcripts.db     # SQLite database (auto-created on first run)
 ├── Dockerfile
 ├── docker-compose.yml
-└── .env                   # DEEPGRAM_API_KEY, DEEPSEEK_API_KEY, SERVER_PORT
+└── .env                   # API keys, port, optional login password
 ```
 
 ## Environment Variables
@@ -32,17 +33,16 @@ transcriber/
 ```
 DEEPGRAM_API_KEY=     # Required for transcription
 DEEPSEEK_API_KEY=     # Optional — enables "Interesting Moments" topic extraction
-SERVER_PORT=3435      # External port (internal always 3000)
+SERVER_PORT=3000      # Port to expose on the host
+LOGIN_PASSWORD=       # Optional — enables password-protected login page
+SESSION_SECRET=       # Recommended when LOGIN_PASSWORD is set; random string
 ```
-
-Note: use `SERVER_PORT` not `PORT` — `PORT` conflicts with Docker/Node internals.
 
 ## Running
 
 ```bash
 # First run
-mkdir -p media uploads
-echo "[]" > history.json
+mkdir -p media uploads data
 docker compose up --build
 
 # Subsequent runs
@@ -62,12 +62,18 @@ docker compose down && docker compose up --build
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/history` | Returns all history entries with `mediaUrl` injected |
+| `PATCH` | `/history/:id/filename` | Rename a history entry's title |
+| `PATCH` | `/history/:id/speakers` | Update speaker name mappings for an entry |
 | `DELETE` | `/history/:id` | Deletes entry + associated media file |
 | `DELETE` | `/history` | Clears all history + all media files |
 | `POST` | `/transcribe` | File upload → ffmpeg extract → Deepgram → DeepSeek topics |
 | `POST` | `/transcribe-url` | yt-dlp download → Deepgram → DeepSeek topics |
 | `POST` | `/save-live` | Multipart: mic + sys webm blobs → ffmpeg mix → save |
 | `POST` | `/retopics/:id` | Regenerate DeepSeek topics for a history entry |
+| `GET` | `/auth` | Returns `{ enabled: bool }` — whether password auth is active |
+| `GET` | `/login` | Login page (only when LOGIN_PASSWORD is set) |
+| `POST` | `/login` | Password check with timing-safe compare + rate limiting |
+| `GET` | `/logout` | Destroys session |
 | `WS` | `/live` | Proxy to Deepgram live WebSocket |
 
 ### WebSocket Live Transcription
@@ -76,6 +82,7 @@ The `/live` WebSocket accepts query params:
 - `key` — Deepgram API key
 - `dual=1` — dual stream mode (mic + system audio)
 - `source=mic|system` — which Deepgram connection this socket feeds
+- `keyterm=word` — repeatable; passed to Deepgram for vocabulary hints
 
 In dual mode, the browser opens **two** WebSocket connections — one for mic, one for system audio. Each connects to a separate Deepgram live session. Transcripts come back tagged with `source` so the frontend can assign speaker indices (mic = Speaker 1, system = Speaker 2+).
 
@@ -89,11 +96,18 @@ In dual mode, the browser opens **two** WebSocket connections — one for mic, o
   "ytId": "8V4bC_V8iQc",
   "sourceUrl": "https://www.youtube.com/watch?v=8V4bC_V8iQc",
   "topics": [{ "start": 94, "end": 112, "label": "Interesting moment label" }],
+  "speakerNames": { "0": "Alice", "1": "Bob" },
   "result": { /* full Deepgram response object */ }
 }
 ```
 
 `mediaUrl` is not stored — it's injected at read time by checking `media/<id>.mp3` or `media/<id>.webm` exists.
+
+### Database
+
+SQLite via `better-sqlite3`. Schema: single `history` table with columns `id`, `filename`, `created_at`, `yt_id`, `source_url`, `result` (JSON), `topics` (JSON), `speaker_names` (JSON).
+
+On first boot, if a `history.json` exists it is automatically migrated into SQLite and renamed to `history.json.migrated`.
 
 ### Audio Pipeline
 
@@ -105,9 +119,13 @@ In dual mode, the browser opens **two** WebSocket connections — one for mic, o
 
 ### Topic Extraction
 
-Runs after every upload/URL transcription. Chunks utterances into 10-minute windows, calls DeepSeek on each chunk, collects candidates, then runs a curation pass to select the best 10-20. Timestamps are sent as raw seconds (not MM:SS) to avoid DeepSeek misinterpretation.
+Runs after every upload/URL transcription. Chunks utterances into ~5-minute windows, calls DeepSeek on each chunk, collects candidates, then runs a curation pass to select the best 10-20. Timestamps are sent as raw seconds (not MM:SS) to avoid DeepSeek misinterpretation.
 
 Skipped if `DEEPSEEK_API_KEY` is not set.
+
+### Auth
+
+Optional. When `LOGIN_PASSWORD` is set: session-based auth (7-day cookie), timing-safe password compare, rate limiting (10 attempts per 15 min) on the login endpoint. WebSocket upgrade also checks session. `SESSION_SECRET` stabilizes sessions across restarts; if omitted, a new secret is generated each restart (logging everyone out).
 
 ## Frontend Conventions
 
@@ -118,23 +136,20 @@ Skipped if `DEEPSEEK_API_KEY` is not set.
 - YouTube embeds use the IFrame API with a 500ms polling interval for timeline sync
 - Native video/audio uses `timeupdate` event for timeline sync
 - Speaker colors are assigned by index from `SPEAKER_COLORS` array (6 colors, wraps)
+- Speaker names are editable inline; prior names are remembered and offered as suggestions
 
 ## Known Issues / Planned Work
 
-- **Storage**: `history.json` is a flat file — SQLite migration planned before any public release
-- **Speaker renaming**: UI to rename Speaker 1/2 to real names, not yet implemented
-- **Dictionary/vocabulary**: Deepgram `keywords` param not yet exposed in UI
-- **Moonshine backend**: Local offline transcription via Moonshine (no API key required) — confirmed working on Linux x86, integration planned
-- **Auth**: No authentication — intended for single-user self-hosted use; auth needed before any multi-user deployment
 - **Export**: Only `.txt` export currently; SRT and DOCX planned
 - **Mobile**: Layout not optimized for mobile
+- **Moonshine backend**: Local offline transcription — in roadmap
+- **Alternative AI backends**: Claude, Ollama, ChatGPT as alternatives to DeepSeek — in roadmap
+- **YouTube closed captions**: Fallback option for URL transcription — in roadmap
 
-## Roadmap to Open Source Release
+## Roadmap
 
-1. SQLite migration (history.json → proper DB)
-2. Speaker renaming UI
-3. Moonshine local backend (offline mode)
-4. Custom vocabulary / dictionary hints
-5. SRT export
-6. Clean README + one-command setup polish
-7. Docker Hub image publish (eliminates local build requirement)
+1. Additional transcription engines (Whisper, Moonshine)
+2. Alternatives to DeepSeek for topic extraction (Claude, Ollama, ChatGPT)
+3. YouTube closed captions fallback
+4. SRT export
+5. Docker Hub image publish

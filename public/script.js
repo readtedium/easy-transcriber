@@ -597,7 +597,7 @@ async function loadHistorySidebar() {
       player.src = "";
 
       if (entry.mediaUrl) {
-        setPlayerSrc(entry.mediaUrl, AUDIO_EXTS.test(entry.mediaUrl));
+        setPlayerSrc(entry.mediaUrl, !entry.hasVideo && AUDIO_EXTS.test(entry.mediaUrl));
         $("history-notice").style.display = "none";
         $("btn-reattach").style.display = "none";
       } else if (!entry.ytId && entry.sourceUrl) {
@@ -706,11 +706,13 @@ function renderLiveTimeline() {
 }
 
 let mediaRecorder, wsLive, wsSystem, isRecording = false;
-let liveText = "", liveRecordingStart = null, liveChunks = [], sysChunks = [];
+let liveText = "", liveRecordingStart = null, liveChunks = [], sysChunks = [], videoChunks = [];
 let liveUtterances = [];
 let stopMeter = null;
+let videoRecorder = null;
 
 $("record-btn").addEventListener("click", () => isRecording ? stopLive() : startLive());
+
 
 function openDgSocket(key, source) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -724,28 +726,57 @@ async function startLive() {
   const key = $("api-key").value.trim();
   if (!key) { alert("Enter your Deepgram API key first."); return; }
 
-  const useSystemAudio = $("chk-system-audio").checked;
-  const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  let sysStream = null;
+  const audioSource = $("audio-source").value; // "mic" | "sys" | "both"
+  const useMic = audioSource !== "sys";
+  const useSys = audioSource !== "mic";
+  const recordVideo = $("chk-record-video").checked;
 
-  if (useSystemAudio) {
+  let micStream = null, sysStream = null;
+
+  if (useMic) {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  }
+
+  if (useSys || recordVideo) {
     try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
-      displayStream.getVideoTracks().forEach(t => t.stop());
-      const audioTracks = displayStream.getAudioTracks();
-      if (audioTracks.length === 0) {
-        alert("No system audio captured — make sure to check 'Share audio'. Falling back to mic only.");
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({ audio: useSys, video: true });
+
+      if (useSys) {
+        const audioTracks = displayStream.getAudioTracks();
+        if (audioTracks.length === 0) {
+          alert("No system audio captured — make sure to check 'Share audio'." + (micStream ? " Falling back to mic only." : ""));
+          if (!micStream && !recordVideo) return;
+        } else {
+          sysStream = new MediaStream(audioTracks);
+        }
+      }
+
+      if (recordVideo && displayStream.getVideoTracks().length > 0) {
+        const videoMimeType = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]
+          .find(m => MediaRecorder.isTypeSupported(m)) || "";
+        const videoOnlyStream = new MediaStream(displayStream.getVideoTracks());
+        videoChunks = [];
+        videoRecorder = new MediaRecorder(videoOnlyStream, videoMimeType ? { mimeType: videoMimeType } : {});
+        videoRecorder.ondataavailable = e => { if (e.data?.size > 0) videoChunks.push(e.data); };
       } else {
-        sysStream = new MediaStream(audioTracks);
+        displayStream.getVideoTracks().forEach(t => t.stop());
       }
     } catch (err) {
-      console.warn("System audio capture failed:", err.message);
-      alert("Couldn't capture system audio — falling back to mic only.");
+      console.warn("Display capture failed:", err.message);
+      if (useSys) {
+        alert("Couldn't capture system audio." + (micStream ? " Falling back to mic only." : ""));
+        if (!micStream) return;
+      }
+      // mic+video: just continue without video if user cancels screen share
     }
   }
 
-  const dual = !!sysStream;
-  stopMeter = startMeter([micStream, ...(sysStream ? [sysStream] : [])]);
+  // In sys-only mode, sysStream is the primary (sent over the main WS like mic)
+  const primaryStream = micStream || sysStream;
+  const dual = !!(micStream && sysStream);
+  stopMeter = startMeter([...(micStream ? [micStream] : []), ...(sysStream ? [sysStream] : [])]);
 
   liveUtterances = [];
   liveChunks = [];
@@ -775,12 +806,13 @@ async function startLive() {
   wsLive.binaryType = "arraybuffer";
 
   wsLive.onopen = () => {
-    $("live-status").textContent = dual ? "Recording mic + system…" : "Recording…";
-    mediaRecorder = makeRecorder(micStream, chunk => {
+    const statusMap = { mic: "Recording…", sys: "Recording system audio…", both: "Recording mic + system…" };
+    $("live-status").textContent = statusMap[audioSource] || "Recording…";
+    mediaRecorder = makeRecorder(primaryStream, chunk => {
       liveChunks.push(chunk);
-      console.log("mic chunk", liveChunks.length, chunk.size);
       if (wsLive.readyState === 1) wsLive.send(chunk);
     });
+    if (videoRecorder) videoRecorder.start(1000);
   };
 
   wsLive.onmessage = e => handleWsMessage(e, "mic");
@@ -788,7 +820,7 @@ async function startLive() {
   wsLive.onclose = () => { $("live-status").textContent = ""; };
 
   // ── System WebSocket (if dual) ─────────────────────────────────────────────
-  if (sysStream) {
+  if (dual) {
     const sysUrl = `${proto}://${location.host}/live?key=${encodeURIComponent(key)}&dual=1&source=system${keytermParams}`;
     wsSystem = new WebSocket(sysUrl);
     wsSystem.binaryType = "arraybuffer";
@@ -806,7 +838,9 @@ async function startLive() {
 
   isRecording = true;
   liveRecordingStart = Date.now();
-  $("chk-system-audio").disabled = true;
+  $("audio-source").disabled = true;
+  $("chk-record-video").disabled = true;
+  $("chk-compress-video").disabled = true;
   $("record-btn").classList.add("recording");
   $("record-btn").innerHTML = `<span class="dot"></span> Stop recording`;
 }
@@ -814,8 +848,8 @@ async function startLive() {
 function handleWsMessage(e, source) {
   const msg = JSON.parse(e.data);
   if (msg.type === "connected") {
-    const useSystemAudio = $("chk-system-audio").checked;
-    $("live-status").textContent = useSystemAudio ? "Recording mic + system…" : "Recording…";
+    const statusMap = { mic: "Recording…", sys: "Recording system audio…", both: "Recording mic + system…" };
+    $("live-status").textContent = statusMap[$("audio-source").value] || "Recording…";
   }
   if (msg.type === "transcript") {
     const speakerIndex = source === "system" 
@@ -834,21 +868,29 @@ function handleWsMessage(e, source) {
 
 function stopLive() {
   mediaRecorder?.stop();
+  videoRecorder?.stop();
+  videoRecorder = null;
   wsLive?.close();
   wsSystem?.close();
   wsSystem = null;
   if (stopMeter) { stopMeter(); stopMeter = null; }
   isRecording = false;
-  $("chk-system-audio").disabled = false;
+  $("audio-source").disabled = false;
+  $("chk-record-video").disabled = false;
+  $("chk-compress-video").disabled = false;
   $("record-btn").classList.remove("recording");
   $("record-btn").innerHTML = "&#x25CF; Start recording";
   $("live-status").textContent = "";
 
-if (liveText.trim() && liveChunks.length) {
+  if (liveText.trim() && liveChunks.length) {
     const duration = liveRecordingStart ? (Date.now() - liveRecordingStart) / 1000 : 0;
     const fd = new FormData();
     fd.append("mic", new Blob(liveChunks, { type: "audio/webm" }), "mic.webm");
     if (sysChunks.length) fd.append("sys", new Blob(sysChunks, { type: "audio/webm" }), "sys.webm");
+    if (videoChunks.length) {
+      fd.append("video", new Blob(videoChunks, { type: "video/webm" }), "video.webm");
+      fd.append("compress", $("chk-compress-video").checked ? "1" : "0");
+    }
     fd.append("transcript", liveText);
     fd.append("duration", String(duration));
     fd.append("utterances", JSON.stringify(liveUtterances));
@@ -859,6 +901,7 @@ if (liveText.trim() && liveChunks.length) {
   liveText = "";
   liveChunks = [];
   sysChunks = [];
+  videoChunks = [];
   liveUtterances = [];
   liveRecordingStart = null;
 }

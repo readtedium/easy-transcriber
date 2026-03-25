@@ -62,9 +62,18 @@
         <div id="panel-live" style="display:none;">
           <div id="live-controls">
             <button id="record-btn">&#x25CF; Start recording</button>
+            <select id="audio-source">
+              <option value="mic">Mic only</option>
+              <option value="sys">System audio only</option>
+              <option value="both">Mic + System</option>
+            </select>
             <label class="mode-toggle">
-              <input type="checkbox" id="chk-system-audio" />
-              Capture system audio
+              <input type="checkbox" id="chk-record-video" />
+              Record screen video
+            </label>
+            <label class="mode-toggle">
+              <input type="checkbox" id="chk-compress-video" checked />
+              Compress to 480p
             </label>
             <span id="live-status"></span>
           </div>

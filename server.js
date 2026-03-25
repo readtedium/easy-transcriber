@@ -40,8 +40,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS history (
   source_url   TEXT,
   result       TEXT NOT NULL,
   topics       TEXT,
-  speaker_names TEXT
+  speaker_names TEXT,
+  has_video    INTEGER DEFAULT 0
 )`);
+try { db.exec(`ALTER TABLE history ADD COLUMN has_video INTEGER DEFAULT 0`); } catch {}
 
 function rowToEntry(row) {
   if (!row) return null;
@@ -54,14 +56,15 @@ function rowToEntry(row) {
     result: JSON.parse(row.result),
     topics: row.topics ? JSON.parse(row.topics) : null,
     speakerNames: row.speaker_names ? JSON.parse(row.speaker_names) : {},
+    hasVideo: row.has_video === 1,
   };
 }
 
 const stmts = {
   getAll:    db.prepare("SELECT * FROM history ORDER BY created_at DESC"),
   getById:   db.prepare("SELECT * FROM history WHERE id = ?"),
-  insert:    db.prepare(`INSERT INTO history (id,filename,created_at,yt_id,source_url,result,topics,speaker_names)
-                         VALUES (@id,@filename,@created_at,@yt_id,@source_url,@result,@topics,@speaker_names)`),
+  insert:    db.prepare(`INSERT INTO history (id,filename,created_at,yt_id,source_url,result,topics,speaker_names,has_video)
+                         VALUES (@id,@filename,@created_at,@yt_id,@source_url,@result,@topics,@speaker_names,@has_video)`),
   deleteOne: db.prepare("DELETE FROM history WHERE id = ?"),
   deleteAll: db.prepare("DELETE FROM history"),
   setTopics: db.prepare("UPDATE history SET topics = ? WHERE id = ?"),
@@ -79,6 +82,7 @@ function dbInsert(entry) {
     result: JSON.stringify(entry.result),
     topics: entry.topics ? JSON.stringify(entry.topics) : null,
     speaker_names: entry.speakerNames ? JSON.stringify(entry.speakerNames) : null,
+    has_video: entry.hasVideo ? 1 : 0,
   });
 }
 function dbDeleteById(id) { stmts.deleteOne.run(id); }
@@ -364,7 +368,7 @@ app.delete("/history", (req, res) => {
 
 // ── /save-live ────────────────────────────────────────────────────────────────
 const uploadLive = multer({ dest: "uploads/" });
-app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), async (req, res) => {
+app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }, { name: "video" }]), async (req, res) => {
   const transcript = req.body.transcript;
   const duration = parseFloat(req.body.duration || "0");
   if (!transcript) return res.status(400).json({ error: "No transcript" });
@@ -372,17 +376,40 @@ app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), as
   const id = Date.now().toString();
   const micPath = req.files?.mic?.[0]?.path;
   const sysPath = req.files?.sys?.[0]?.path;
+  const videoPath = req.files?.video?.[0]?.path;
+  const compress = req.body.compress !== "0";
   const outPath = path.join(MEDIA_DIR, `${id}.webm`);
-  console.log("save-live: mic:", micPath, "sys:", sysPath, "out:", outPath);
+  console.log("save-live: mic:", micPath, "sys:", sysPath, "video:", videoPath, "out:", outPath);
   console.log("save-live: mic size:", micPath ? fs.statSync(micPath).size : "none");
   console.log("save-live: transcript length:", transcript?.length);
 
   try {
-    if (micPath && sysPath) {
+    if (videoPath) {
+      // Build input list and track indices
+      const args = [];
+      let idx = 0, micIdx = -1, sysIdx = -1;
+      if (micPath) { args.push("-i", micPath); micIdx = idx++; }
+      if (sysPath) { args.push("-i", sysPath); sysIdx = idx++; }
+      args.push("-i", videoPath);
+      const vidIdx = idx;
+
+      if (micIdx >= 0 && sysIdx >= 0) {
+        args.push("-filter_complex", `[${micIdx}:a]aformat=channel_layouts=stereo[a0];[${sysIdx}:a]aformat=channel_layouts=stereo[a1];[a0][a1]amix=inputs=2:duration=longest[aout]`);
+        args.push("-map", `${vidIdx}:v:0`, "-map", "[aout]");
+      } else if (micIdx >= 0) {
+        args.push("-map", `${vidIdx}:v:0`, "-map", `${micIdx}:a:0`);
+      } else {
+        args.push("-map", `${vidIdx}:v:0`);
+      }
+
+      if (compress) args.push("-vf", "scale=-2:480");
+      args.push("-c:v", "libvpx", "-crf", "10", "-b:v", "1M", "-c:a", "libopus", "-y", outPath);
+      await execFileAsync("ffmpeg", args);
+    } else if (micPath && sysPath) {
       await execFileAsync("ffmpeg", [
         "-i", micPath, "-i", sysPath,
-        "-filter_complex", "amix=inputs=2:duration=longest",
-        "-c:a", "libopus", "-y", outPath,
+        "-filter_complex", "[0:a]aformat=channel_layouts=stereo[a0];[1:a]aformat=channel_layouts=stereo[a1];[a0][a1]amix=inputs=2:duration=longest[aout]",
+        "-map", "[aout]", "-c:a", "libopus", "-y", outPath,
       ]);
     } else if (micPath) {
       // Always remux through ffmpeg — raw webm chunks need a proper container
@@ -393,11 +420,12 @@ app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), as
       ]);
     }
   } catch (err) {
-    console.error("Audio mix failed:", err.message);
-    if (micPath && fs.existsSync(micPath)) fs.copyFileSync(micPath, outPath);
+    console.error("Audio/video mix failed:", err.message);
+    if (!videoPath && micPath && fs.existsSync(micPath)) fs.copyFileSync(micPath, outPath);
   } finally {
     if (micPath && fs.existsSync(micPath)) fs.unlinkSync(micPath);
     if (sysPath && fs.existsSync(sysPath)) fs.unlinkSync(sysPath);
+    if (videoPath && fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
   }
 
   let utterances = [];
@@ -408,6 +436,7 @@ app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }]), as
     filename: `Live recording — ${new Date().toLocaleString()}`,
     createdAt: new Date().toISOString(),
     ytId: null, sourceUrl: null,
+    hasVideo: !!videoPath,
     result: {
       results: {
         channels: [{ alternatives: [{ transcript, paragraphs: utterances.length ? null : [{ sentences: [{ text: transcript, start: 0, end: duration }], speaker: 0 }] }] }],
