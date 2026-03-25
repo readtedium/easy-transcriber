@@ -15,8 +15,8 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 - **File upload** — MP3, MP4, MOV, WAV, M4A, FLAC, OGG, MKV up to 2 GB
     - Audio extracted from files to minimize size, but local copy of video can be reattached.
 - **URL transcription** — YouTube, podcasts, and anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports
-- **Live mic transcription** — real-time streaming with speaker diarization
-    - Capable of detecting multiple speakers
+- **Live transcription** — real-time streaming with speaker diarization; choose from mic only, system audio only, or mic + system as separate speaker tracks
+- **Screen video recording** — optionally record your screen alongside any live session; saved with the transcript for playback sync. Compressed to 480p by default (toggleable per recording).
 - **Keyterms support** — add up to 100 comma-separated keywords to the upload, allowing for accurate detection of proper nouns or jargon-laden terms
 - **Dual-stream mode** — capture mic and system audio simultaneously as separate speakers
 - **Interesting moments** — AI-powered topic extraction highlights the best moments (optional, requires DeepSeek key)
@@ -81,9 +81,19 @@ Just hard-refresh the browser — no restart needed.
 
 ## Live Transcription
 
-The **Live mic** tab streams audio to Deepgram in real time. Enable **Capture system audio** to record both your microphone and speaker output simultaneously, with each assigned to a separate speaker track.
+The **Live mic** tab streams audio to Deepgram in real time. Use the audio source selector to choose between:
 
-> System audio capture uses the browser's `getDisplayMedia` API. You'll be prompted to share a tab or window; audio capture must be enabled in that prompt.
+- **Mic only** — microphone input
+- **System audio only** — whatever is playing on your computer (useful for transcribing calls or videos you're watching)
+- **Mic + System** — both simultaneously, each assigned to a separate speaker track
+
+> System audio capture uses the browser's `getDisplayMedia` API. You'll be prompted to share a tab or window; for system audio modes, make sure to enable audio capture in that prompt.
+
+### Screen video recording
+
+Check **Record screen video** before starting a session to save a screen recording alongside the transcript. This is available in all audio modes — in mic-only mode it records the screen without capturing system audio. The recording is saved with the transcript and syncs to the playback timeline.
+
+Video is compressed to 480p by default to keep file sizes manageable. Uncheck **Compress to 480p** before recording if you want the full resolution.
 
 ## Interesting Moments
 
