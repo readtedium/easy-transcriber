@@ -565,11 +565,17 @@ wss.on("connection", (clientWs, req) => {
     try {
       const source = dual ? (params.get("source") || "mic") : "mic";
       const conn = await dg.listen.live(dgOptions);
-      conn.on("open", () => send({ type: "connected" }));
+      let dgReady = false;
+      const pending = [];
+      conn.on("open", () => {
+        dgReady = true;
+        pending.splice(0).forEach(msg => conn.send(msg));
+        send({ type: "connected" });
+      });
       conn.on("close", () => send({ type: "closed" }));
       conn.on("Results", data => send({ type: "transcript", data, source }));
       conn.on("error", err => send({ type: "error", message: err?.message || String(err) }));
-      clientWs.on("message", msg => { if (conn.getReadyState() === 1) conn.send(msg); });
+      clientWs.on("message", msg => { if (dgReady) conn.send(msg); else pending.push(msg); });
       clientWs.on("close", () => { try { conn.finish(); } catch {} });
     } catch (err) {
       console.error("Failed to open Deepgram connection:", err);
