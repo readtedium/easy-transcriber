@@ -59,7 +59,7 @@ cd easy-transcriber
 cp .env.example .env
 # Edit .env and set DEEPGRAM_API_KEY
 mkdir -p media uploads data
-docker compose up --build
+docker compose up --build   # docker-compose.override.yml enables local build automatically
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
