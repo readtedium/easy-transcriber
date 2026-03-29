@@ -10,7 +10,14 @@ RUN npm install --production
 
 COPY . .
 
-RUN mkdir -p uploads public
+RUN mkdir -p uploads public/ffmpeg \
+  && mkdir /tmp/ff && cd /tmp/ff \
+  && npm init -y \
+  && npm install @ffmpeg/ffmpeg@0.12.10 @ffmpeg/core@0.12.6 \
+  && cp node_modules/@ffmpeg/ffmpeg/dist/esm/*.js /app/public/ffmpeg/ \
+  && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js   /app/public/ffmpeg/ \
+  && cp node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.wasm /app/public/ffmpeg/ \
+  && rm -rf /tmp/ff
 
 EXPOSE 3000
 

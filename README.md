@@ -13,7 +13,8 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 ## Features
 
 - **File upload** — MP3, MP4, MOV, WAV, M4A, FLAC, OGG, MKV up to 2 GB
-    - Audio extracted from files to minimize size, but local copy of video can be reattached.
+    - Audio is extracted server-side from video files. Original video can be reattached locally for playback sync.
+    - **Browser audio extraction** — optionally extract audio in-browser before uploading (check *Extract audio in browser* before selecting a file). Uses ffmpeg compiled to WebAssembly; converts a 760 MB video to ~44 MB before it ever leaves your machine. Useful when your transcription server is remote.
 - **URL transcription** — YouTube, podcasts, and anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) supports
 - **Live transcription** — real-time streaming with speaker diarization; choose from mic only, system audio only, or mic + system as separate speaker tracks
 - **Screen video recording** — optionally record your screen alongside any live session; saved with the transcript for playback sync. Compressed to 480p by default (toggleable per recording).
@@ -164,9 +165,10 @@ node server.js
 
 ## Roadmap
 
-- Look into additional transcription engines (Whisper, Moonshine Voice)
-- Add alternatives to DeepSeek (Claude, Ollama, ChatGPT)
-- Download YouTube closed captions as a fallback option
+- Additional transcription engines (Whisper, Moonshine)
+- Alternatives to DeepSeek for topic extraction (Claude, Ollama, ChatGPT)
+- YouTube closed captions as a fallback for URL transcription
+- SRT export
 
 ## License
 

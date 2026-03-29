@@ -53,6 +53,10 @@
             <p class="drop-sub">MP3, MP4, MOV, WAV, M4A, FLAC, OGG, MKV — up to 2 GB</p>
             <input type="file" id="file-input" accept="audio/*,video/*" />
           </div>
+          <label class="mode-toggle" id="browser-extract-row">
+            <input type="checkbox" id="chk-browser-extract" />
+            Extract audio in browser <span style="color:var(--muted);font-size:11px;">(video files only — avoids uploading full video)</span>
+          </label>
           <div id="progress-wrap" style="display:none;">
             <progress id="upload-progress" value="0" max="100"></progress>
             <p id="status"></p>

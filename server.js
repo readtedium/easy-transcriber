@@ -252,14 +252,22 @@ function mediaUrlForId(id) {
 async function callDeepSeek(prompt) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) return null;
-  const resp = await fetch("https://api.deepseek.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "deepseek-chat", max_tokens: 2048, temperature: 0.3,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  let resp;
+  try {
+    resp = await fetch("https://api.deepseek.com/v1/chat/completions", {
+      signal: controller.signal,
+      method: "POST",
+      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "deepseek-chat", max_tokens: 2048, temperature: 0.3,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await resp.json();
   let text = data.choices?.[0]?.message?.content?.trim() || "[]";
   // Strip markdown code fences if present
@@ -367,7 +375,7 @@ app.delete("/history", (req, res) => {
 });
 
 // ── /save-live ────────────────────────────────────────────────────────────────
-const uploadLive = multer({ dest: "uploads/" });
+const uploadLive = multer({ dest: "uploads/", limits: { fieldSize: 50 * 1024 * 1024 } });
 app.post("/save-live", uploadLive.fields([{ name: "mic" }, { name: "sys" }, { name: "video" }]), async (req, res) => {
   const transcript = req.body.transcript;
   const duration = parseFloat(req.body.duration || "0");

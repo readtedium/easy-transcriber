@@ -150,7 +150,7 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
 dropZone.addEventListener("drop", e => { e.preventDefault(); dropZone.classList.remove("over"); handleFile(e.dataTransfer.files[0]); });
 $("file-input").addEventListener("change", () => handleFile($("file-input").files[0]));
 
-function handleFile(file) {
+async function handleFile(file) {
   if (!file) return;
   const key = $("api-key").value.trim();
   const isVideo = file.type.startsWith("video/") || VIDEO_EXTS.test(file.name);
@@ -170,17 +170,40 @@ function handleFile(file) {
   $("timeline").innerHTML = "";
   $("summary-card").style.display = "none";
   $("progress-wrap").style.display = "";
-  $("status").textContent = isVideo ? "Extracting audio…" : "Uploading…";
-  $("upload-progress").value = 10;
+  $("upload-progress").value = 5;
+
+  let uploadFile = file;
+  console.log(`[transcriber] file: ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB, type: ${file.type || "unknown"}, isVideo: ${isVideo})`);
+  if (isVideo && $("chk-browser-extract").checked) {
+    console.log("[transcriber] browser audio extraction: starting");
+    try {
+      uploadFile = await extractAudioBrowser(file, (text, pct) => {
+        $("status").textContent = text;
+        if (pct != null) $("upload-progress").value = Math.round(pct * 80);
+      });
+      console.log(`[transcriber] browser audio extraction: done — ${(uploadFile.size / 1024 / 1024).toFixed(1)} MB (was ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+      $("upload-progress").value = 80;
+      $("status").textContent = "Uploading audio…";
+    } catch (err) {
+      console.error("[transcriber] browser audio extraction failed:", err);
+      $("status").textContent = `Browser extraction failed (${err.message}) — uploading original…`;
+      uploadFile = file;
+    }
+  } else {
+    $("status").textContent = isVideo ? "Uploading video…" : "Uploading…";
+  }
 
   const fd = new FormData();
-  fd.append("audio", file);
+  fd.append("audio", uploadFile, file.name);
   const keyterms = $("keyterms").value.trim();
   if (keyterms) fd.append("keyterms", keyterms);
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/transcribe");
   xhr.setRequestHeader("x-deepgram-key", key);
-  xhr.upload.onprogress = e => { if (e.lengthComputable) $("upload-progress").value = Math.round((e.loaded/e.total)*60); };
+  const uploadBase = uploadFile !== file ? 80 : 0;
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) $("upload-progress").value = uploadBase + Math.round((e.loaded / e.total) * (90 - uploadBase));
+  };
   xhr.onload = () => {
     $("upload-progress").value = 100;
     if (xhr.status === 200) {
@@ -195,9 +218,54 @@ function handleFile(file) {
   };
   xhr.onerror = () => { $("status").textContent = "Network error"; };
   xhr.send(fd);
-  $("status").textContent = isVideo ? "Transcribing (audio extracted)…" : "Transcribing…";
+  $("status").textContent = "Transcribing…";
   $("topics-card").style.display = "none";
   $("topics-list").innerHTML = "";
+}
+
+// ── Browser-side audio extraction via ffmpeg.wasm ─────────────────────────────
+async function extractAudioBrowser(file, onStatus) {
+  onStatus("Loading FFmpeg WASM…", 0);
+  if (!extractAudioBrowser._ff) {
+    console.log("[transcriber] ffmpeg.wasm: loading…");
+    const { FFmpeg } = await import("/ffmpeg/index.js");
+    const ff = new FFmpeg();
+    await ff.load({
+      workerURL: "/ffmpeg/worker.js",
+      coreURL: "/ffmpeg/ffmpeg-core.js",
+      wasmURL: "/ffmpeg/ffmpeg-core.wasm",
+    });
+    console.log("[transcriber] ffmpeg.wasm: loaded and ready");
+    extractAudioBrowser._ff = ff;
+  }
+  const ff = extractAudioBrowser._ff;
+
+  const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")) : ".mp4";
+  const inName = `in${ext}`;
+  const outName = "out.m4a";
+
+  onStatus("Reading file into memory…", 0);
+  console.log(`[transcriber] ffmpeg.wasm: writing ${inName} to virtual FS…`);
+  await ff.writeFile(inName, new Uint8Array(await file.arrayBuffer()));
+  console.log("[transcriber] ffmpeg.wasm: starting audio extraction");
+
+  const onProgress = ({ progress }) => {
+    const pct = Math.min(progress, 1);
+    onStatus(`Extracting audio… ${Math.round(pct * 100)}%`, pct);
+    if (Math.round(pct * 100) % 10 === 0) console.log(`[transcriber] ffmpeg.wasm: ${Math.round(pct * 100)}%`);
+  };
+  ff.on("progress", onProgress);
+  try {
+    await ff.exec(["-i", inName, "-vn", "-c:a", "aac", "-b:a", "128k", outName]);
+  } finally {
+    ff.off("progress", onProgress);
+    await ff.deleteFile(inName).catch(() => {});
+  }
+
+  const data = await ff.readFile(outName);
+  await ff.deleteFile(outName).catch(() => {});
+  console.log(`[transcriber] ffmpeg.wasm: extraction complete — output ${(data.byteLength / 1024 / 1024).toFixed(1)} MB`);
+  return new Blob([data.buffer], { type: "audio/mp4" });
 }
 
 // ── URL transcription ─────────────────────────────────────────────────────────
@@ -554,13 +622,17 @@ $("reattach-input").addEventListener("change", () => {
   const file = $("reattach-input").files[0];
   if (!file) return;
   $("yt-container").style.display = "none";
+  const src = URL.createObjectURL(file);
+  wirePlayerSync();
   player.style.display = "";
-  const isVideo = file.type.startsWith("video/") || VIDEO_EXTS.test(file.name);
-  setPlayerSrc(URL.createObjectURL(file), !isVideo);
+  setPlayerSrc(src, false); // optimistically treat as video; corrected by loadedmetadata
+  const el = player;
+  el.addEventListener("loadedmetadata", () => {
+    if (el.videoWidth === 0) el.setAttribute("data-audio", "");
+  }, { once: true });
   $("history-notice").style.display = "none";
   $("btn-reattach").textContent = "Swap file";
   $("media-label").textContent = file.name;
-  wirePlayerSync();
   document.querySelectorAll(".utterance").forEach(div => {
     const fresh = div.cloneNode(true);
     div.parentNode.replaceChild(fresh, div);
