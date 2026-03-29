@@ -57,6 +57,13 @@
             <input type="checkbox" id="chk-browser-extract" />
             Extract audio in browser <span style="color:var(--muted);font-size:11px;">(video files only — avoids uploading full video)</span>
           </label>
+          <div id="engine-row" style="display:none;">
+            <label for="engine-select" style="font-size:13px;">Engine:</label>
+            <select id="engine-select">
+              <option value="deepgram">Deepgram (cloud)</option>
+              <option value="moonshine">Moonshine (local)</option>
+            </select>
+          </div>
           <div id="progress-wrap" style="display:none;">
             <progress id="upload-progress" value="0" max="100"></progress>
             <p id="status"></p>

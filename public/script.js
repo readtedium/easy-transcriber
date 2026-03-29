@@ -6,6 +6,32 @@ const SPEAKER_COLORS = [
 ];
 
 const fmtTime = s => `${String(Math.floor(s/60)).padStart(2,"0")}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+
+function buildMoonshineClientResult(lines) {
+  const utterances = lines.map((line, i) => {
+    const words = (line.words || []).map(w => ({
+      word: w.word, start: w.start, end: w.end, confidence: 0.9,
+      punctuated_word: w.word, speaker: line.speaker || 0, speaker_confidence: 0.9,
+    }));
+    return { id: String(i), start: line.start, end: line.end, confidence: 0.9,
+      channel: 0, transcript: line.text, words, speaker: line.speaker || 0 };
+  });
+  const allWords = utterances.flatMap(u => u.words);
+  const fullTranscript = lines.map(l => l.text).join(" ");
+  const duration = lines[lines.length - 1]?.end || 0;
+  return {
+    metadata: { duration, channels: 1 },
+    results: {
+      channels: [{ alternatives: [{ transcript: fullTranscript, confidence: 0.9, words: allWords,
+        paragraphs: { transcript: fullTranscript, paragraphs: lines.map(line => ({
+          sentences: [{ text: line.text, start: line.start, end: line.end }],
+          num_words: line.text.split(" ").length, start: line.start, end: line.end, speaker: line.speaker || 0,
+        })) },
+      }] }],
+      utterances,
+    },
+  };
+}
 const fmtDate = iso => new Date(iso).toLocaleDateString(undefined, { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
 const VIDEO_EXTS = /\.(mp4|mov|avi|webm|mkv|m4v)$/i;
 const AUDIO_EXTS = /\.(mp3|m4a|flac|ogg|wav|webm|aac)$/i;
@@ -44,6 +70,17 @@ fetch("/auth").then(r => r.json()).then(d => {
     $("api-key-row").style.display = "none";
   }
 }).catch(() => {});
+
+function pollBackends(attempts = 0) {
+  fetch("/api/backends").then(r => r.json()).then(d => {
+    if (d.moonshine) {
+      $("engine-row").style.display = "";
+    } else if (attempts < 24) {
+      setTimeout(() => pollBackends(attempts + 1), 5000);
+    }
+  }).catch(() => { if (attempts < 24) setTimeout(() => pollBackends(attempts + 1), 5000); });
+}
+pollBackends();
 
 // ── API key ───────────────────────────────────────────────────────────────────
 const savedKey = localStorage.getItem("dg_key");
@@ -197,30 +234,82 @@ async function handleFile(file) {
   fd.append("audio", uploadFile, file.name);
   const keyterms = $("keyterms").value.trim();
   if (keyterms) fd.append("keyterms", keyterms);
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", "/transcribe");
-  xhr.setRequestHeader("x-deepgram-key", key);
-  const uploadBase = uploadFile !== file ? 80 : 0;
-  xhr.upload.onprogress = e => {
-    if (e.lengthComputable) $("upload-progress").value = uploadBase + Math.round((e.loaded / e.total) * (90 - uploadBase));
-  };
-  xhr.onload = () => {
-    $("upload-progress").value = 100;
-    if (xhr.status === 200) {
-      $("status").textContent = "Done.";
-      const data = JSON.parse(xhr.responseText);
-      currentHistoryId = data._historyId;
-      renderResult(data, false, null);
-      loadHistorySidebar();
-    } else {
-      $("status").textContent = "Error: " + (JSON.parse(xhr.responseText).error || "Unknown");
-    }
-  };
-  xhr.onerror = () => { $("status").textContent = "Network error"; };
-  xhr.send(fd);
-  $("status").textContent = "Transcribing…";
+  fd.append("backend", $("engine-select").value);
   $("topics-card").style.display = "none";
   $("topics-list").innerHTML = "";
+
+  if ($("engine-select").value === "moonshine") {
+    // ── Moonshine: SSE streaming path ────────────────────────────────────────
+    $("status").textContent = "Uploading…";
+    const accLines = [];
+    try {
+      const resp = await fetch("/transcribe", {
+        method: "POST",
+        headers: { "x-deepgram-key": key },
+        body: fd,
+      });
+      if (!resp.ok) {
+        $("status").textContent = "Error: " + ((await resp.json()).error || "Unknown");
+        return;
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      $("results").classList.add("show");
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n\n");
+        buf = parts.pop();
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          const evt = JSON.parse(part.slice(6));
+          if (evt.type === "chunk") {
+            accLines.push(...(evt.lines || []));
+            const pct = Math.round((evt.current / evt.total) * 100);
+            $("upload-progress").value = pct;
+            $("status").textContent = `Transcribing (local) — ${evt.current}/${evt.total} (${pct}%)…`;
+            if (accLines.length) renderResult(buildMoonshineClientResult(accLines), false, null, true);
+          } else if (evt.type === "done") {
+            $("upload-progress").value = 100;
+            $("status").textContent = "Done.";
+            currentHistoryId = evt._historyId;
+            renderResult(evt, false, null);
+            loadHistorySidebar();
+          } else if (evt.type === "error") {
+            $("status").textContent = "Error: " + (evt.error || "Unknown");
+          }
+        }
+      }
+    } catch (err) {
+      $("status").textContent = "Error: " + err.message;
+    }
+  } else {
+    // ── Deepgram: standard XHR path ──────────────────────────────────────────
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/transcribe");
+    xhr.setRequestHeader("x-deepgram-key", key);
+    const uploadBase = uploadFile !== file ? 80 : 0;
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) $("upload-progress").value = uploadBase + Math.round((e.loaded / e.total) * (90 - uploadBase));
+    };
+    xhr.onload = () => {
+      $("upload-progress").value = 100;
+      if (xhr.status === 200) {
+        $("status").textContent = "Done.";
+        const data = JSON.parse(xhr.responseText);
+        currentHistoryId = data._historyId;
+        renderResult(data, false, null);
+        loadHistorySidebar();
+      } else {
+        $("status").textContent = "Error: " + (JSON.parse(xhr.responseText).error || "Unknown");
+      }
+    };
+    xhr.onerror = () => { $("status").textContent = "Network error"; };
+    xhr.send(fd);
+    $("status").textContent = "Transcribing…";
+  }
 }
 
 // ── Browser-side audio extraction via ffmpeg.wasm ─────────────────────────────
@@ -292,7 +381,7 @@ async function handleUrl() {
     const res = await fetch("/transcribe-url", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-deepgram-key": key },
-      body: JSON.stringify({ url, keyterms: $("keyterms").value.trim() }),
+      body: JSON.stringify({ url, keyterms: $("keyterms").value.trim(), backend: $("engine-select").value }),
     });
     $("upload-progress").value = 90;
     if (!res.ok) { $("status").textContent = "Error: " + ((await res.json()).error || "Unknown"); return; }
@@ -322,7 +411,7 @@ async function handleUrl() {
 }
 
 // ── Render result ─────────────────────────────────────────────────────────────
-function renderResult(result, fromHistory = false, ytId = null) {
+function renderResult(result, fromHistory = false, ytId = null, keepUploadCard = false) {
   currentSpeakerNames = result._speakerNames || {};
   const ch = result?.results?.channels?.[0];
   const utterances = result?.results?.utterances || [];
@@ -360,7 +449,7 @@ function renderResult(result, fromHistory = false, ytId = null) {
   wireRenameBadges();
 
   if (!fromHistory) {
-    if (!ytId) wirePlayerSync();
+    if (!ytId && !keepUploadCard) wirePlayerSync();
     $("btn-reattach").style.display = "none";
     $("history-notice").style.display = "none";
   } else {
@@ -370,8 +459,8 @@ function renderResult(result, fromHistory = false, ytId = null) {
   }
 
   $("results").classList.add("show");
-  if (!isRecording) collapseUploadCard();
-  $("progress-wrap").style.display = "none";
+  if (!isRecording && !keepUploadCard) collapseUploadCard();
+  if (!keepUploadCard) $("progress-wrap").style.display = "none";
 
   // Set editable title
   const title = result._filename || result._title || result._historyFilename || "";

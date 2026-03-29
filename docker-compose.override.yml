@@ -1,3 +1,11 @@
 services:
   transcriber:
     build: .
+
+  moonshine:
+    build: ./moonshine
+    profiles:
+      - moonshine
+    restart: unless-stopped
+    ports:
+      - "8765:8765"

@@ -162,6 +162,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 
 const app = express();
 const server = createServer({ maxHeaderSize: 32768 }, app);
+server.requestTimeout = 0; // disable 5-min default; long Moonshine jobs need unlimited time
 const wss = new WebSocketServer({ noServer: true });
 
 app.use(cors());
@@ -485,20 +486,27 @@ async function downloadFromUrl(url, outputDir) {
 app.post("/transcribe-url", async (req, res) => {
   const { url, keyterms: keytermStr } = req.body;
   if (!url) return res.status(400).json({ error: "No URL provided" });
+  const backend = req.body.backend === "moonshine" && moonshineAvailable ? "moonshine" : "deepgram";
   const apiKey = req.headers["x-deepgram-key"] || process.env.DEEPGRAM_API_KEY;
-  if (!apiKey) return res.status(401).json({ error: "Missing API key" });
+  if (backend === "deepgram" && !apiKey) return res.status(401).json({ error: "Missing API key" });
   const keyterms = parseKeyterms(keytermStr);
   let filePath = null;
   try {
     const { filePath: fp, title } = await downloadFromUrl(url, path.join(__dirname, "uploads"));
     filePath = fp;
-    const dg = createClient(apiKey);
-    const { result, error } = await dg.listen.prerecorded.transcribeFile(fs.readFileSync(filePath), {
-      model: "nova-3", smart_format: true, diarize: true,
-      paragraphs: true, summarize: "v2", punctuate: true, utterances: true,
-      ...(keyterms.length && { keyterm: keyterms }),
-    });
-    if (error) return res.status(500).json({ error: error.message });
+    let result;
+    if (backend === "moonshine") {
+      result = await transcribeWithMoonshine(filePath);
+    } else {
+      const dg = createClient(apiKey);
+      const { result: dgResult, error } = await dg.listen.prerecorded.transcribeFile(fs.readFileSync(filePath), {
+        model: "nova-3", smart_format: true, diarize: true,
+        paragraphs: true, summarize: "v2", punctuate: true, utterances: true,
+        ...(keyterms.length && { keyterm: keyterms }),
+      });
+      if (error) return res.status(500).json({ error: error.message });
+      result = dgResult;
+    }
 
     const topics = await extractTopics(result.results?.utterances || []);
     const ytId = getYouTubeId(url) || null;
@@ -518,11 +526,54 @@ app.post("/transcribe-url", async (req, res) => {
 // ── /transcribe (file upload) ─────────────────────────────────────────────────
 app.post("/transcribe", upload.single("audio"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+  const backend = req.body.backend === "moonshine" && moonshineAvailable ? "moonshine" : "deepgram";
   const apiKey = req.headers["x-deepgram-key"] || process.env.DEEPGRAM_API_KEY;
-  if (!apiKey) return res.status(401).json({ error: "Missing API key" });
+  if (backend === "deepgram" && !apiKey) return res.status(401).json({ error: "Missing API key" });
   const keyterms = parseKeyterms(req.body.keyterms);
   const id = Date.now().toString();
   const savedAudioPath = path.join(MEDIA_DIR, `${id}.mp3`);
+
+  // ── Moonshine: SSE streaming path ──────────────────────────────────────────
+  if (backend === "moonshine") {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" });
+    const sse = obj => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
+    const chunkDir = path.join(__dirname, "uploads", `chunks-${id}`);
+    let aborted = false;
+    req.on("close", () => { aborted = true; });
+    try {
+      await extractAudio(req.file.path, savedAudioPath);
+      const chunkFiles = await splitAudioChunks(savedAudioPath, chunkDir);
+      const allLines = [];
+      let offsetSec = 0;
+      for (let i = 0; i < chunkFiles.length; i++) {
+        if (aborted) break;
+        const chunkPath = path.join(chunkDir, chunkFiles[i]);
+        const { lines = [] } = await transcribeChunkWithMoonshine(chunkPath, offsetSec);
+        allLines.push(...lines);
+        offsetSec += await getAudioDuration(chunkPath);
+        sse({ type: "chunk", lines, current: i + 1, total: chunkFiles.length });
+        fs.unlinkSync(chunkPath);
+      }
+      if (!aborted) {
+        const duration = allLines.length ? allLines[allLines.length - 1].end : 0;
+        const result = buildMoonshineResult(allLines, duration);
+        const topics = await extractTopics(result.results?.utterances || []);
+        const entry = { id, filename: req.file.originalname, createdAt: new Date().toISOString(), ytId: null, sourceUrl: null, result, topics };
+        dbInsert(entry);
+        sse({ type: "done", ...result, _historyId: id, _filename: req.file.originalname, mediaUrl: `/media/${id}.mp3`, _topics: topics });
+      }
+    } catch (err) {
+      sse({ type: "error", error: err.message });
+      if (fs.existsSync(savedAudioPath)) fs.unlinkSync(savedAudioPath);
+    } finally {
+      res.end();
+      if (fs.existsSync(chunkDir)) fs.rmSync(chunkDir, { recursive: true, force: true });
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    }
+    return;
+  }
+
+  // ── Deepgram: standard JSON path ───────────────────────────────────────────
   try {
     await extractAudio(req.file.path, savedAudioPath);
     const dg = createClient(apiKey);
@@ -532,7 +583,6 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
       ...(keyterms.length && { keyterm: keyterms }),
     });
     if (error) return res.status(500).json({ error: error.message });
-
     const topics = await extractTopics(result.results?.utterances || []);
     const entry = { id, filename: req.file.originalname, createdAt: new Date().toISOString(), ytId: null, sourceUrl: null, result, topics };
     dbInsert(entry);
@@ -541,7 +591,7 @@ app.post("/transcribe", upload.single("audio"), async (req, res) => {
     if (fs.existsSync(savedAudioPath)) fs.unlinkSync(savedAudioPath);
     res.status(500).json({ error: err.message });
   } finally {
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
   }
 });
 
@@ -605,6 +655,100 @@ server.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
   });
 });
+
+// ── Moonshine backend probe ───────────────────────────────────────────────────
+const MOONSHINE_URL = process.env.MOONSHINE_URL || "http://moonshine:8765";
+let moonshineAvailable = false;
+
+async function probeMoonshine() {
+  try {
+    const res = await fetch(`${MOONSHINE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+    moonshineAvailable = res.ok;
+  } catch {
+    moonshineAvailable = false;
+  }
+}
+
+// Probe every 5s until moonshine responds, then every 30s
+probeMoonshine();
+const _moonshineStartupInterval = setInterval(async () => {
+  await probeMoonshine();
+  if (moonshineAvailable) {
+    clearInterval(_moonshineStartupInterval);
+    setInterval(probeMoonshine, 30_000);
+    console.log("Moonshine backend is available.");
+  }
+}, 5_000);
+
+app.get("/api/backends", (_req, res) => {
+  res.json({ deepgram: true, moonshine: moonshineAvailable });
+});
+
+app.get("/api/moonshine-progress", async (_req, res) => {
+  try {
+    const r = await fetch(`${MOONSHINE_URL}/progress`, { signal: AbortSignal.timeout(3000) });
+    res.json(await r.json());
+  } catch {
+    res.json({ current: 0, total: 0, active: false });
+  }
+});
+
+async function getAudioDuration(filePath) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", filePath,
+  ]);
+  return parseFloat(stdout.trim()) || 30;
+}
+
+async function splitAudioChunks(audioPath, chunkDir, chunkSec = 30) {
+  fs.mkdirSync(chunkDir, { recursive: true });
+  await execFileAsync("ffmpeg", [
+    "-i", audioPath,
+    "-f", "segment", "-segment_time", String(chunkSec),
+    "-c:a", "libmp3lame", "-ar", "16000", "-ac", "1", "-q:a", "4",
+    path.join(chunkDir, "chunk%04d.mp3"),
+  ]);
+  return fs.readdirSync(chunkDir).filter(f => f.endsWith(".mp3")).sort();
+}
+
+function buildMoonshineResult(lines, duration) {
+  const utterances = lines.map((line, i) => {
+    const dg_words = (line.words || []).map(w => ({
+      word: w.word.toLowerCase().replace(/[.,!?;:"']+$/, ""),
+      start: w.start, end: w.end, confidence: 0.9,
+      punctuated_word: w.word, speaker: line.speaker || 0, speaker_confidence: 0.9,
+    }));
+    return {
+      id: String(i), start: line.start, end: line.end, confidence: 0.9,
+      channel: 0, transcript: line.text, words: dg_words, speaker: line.speaker || 0,
+    };
+  });
+  const allWords = utterances.flatMap(u => u.words);
+  const fullTranscript = lines.map(l => l.text).join(" ");
+  return {
+    metadata: { transaction_key: "moonshine", request_id: `moonshine-${Date.now()}`,
+      created: new Date().toISOString(), duration, channels: 1, models: ["moonshine"] },
+    results: {
+      channels: [{ alternatives: [{ transcript: fullTranscript, confidence: 0.9, words: allWords,
+        paragraphs: { transcript: fullTranscript, paragraphs: lines.map(line => ({
+          sentences: [{ text: line.text, start: line.start, end: line.end }],
+          num_words: line.text.split(" ").length, start: line.start, end: line.end, speaker: line.speaker || 0,
+        })) },
+      }] }],
+      utterances,
+    },
+  };
+}
+
+async function transcribeChunkWithMoonshine(chunkPath, offsetSec) {
+  const form = new FormData();
+  form.append("file", new Blob([fs.readFileSync(chunkPath)]), "chunk.mp3");
+  form.append("offset_sec", String(offsetSec));
+  const res = await fetch(`${MOONSHINE_URL}/transcribe-chunk`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`Moonshine chunk error ${res.status}: ${await res.text()}`);
+  return res.json();
+}
 
 const PORT = process.env.SERVER_PORT || 3000;
 server.listen(PORT, () => console.log(`Transcriber running on http://localhost:${PORT}`));

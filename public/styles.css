@@ -209,6 +209,8 @@ header h1 { font-size: 16px; font-weight: 500; }
 
 #browser-extract-row { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 13px; cursor: pointer; }
 #browser-extract-row input { cursor: pointer; }
+#engine-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+#engine-row select { font-size: 13px; padding: 3px 6px; border-radius: 6px; border: 0.5px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
 #progress-wrap { margin-top: 12px; }
 progress { width: 100%; height: 4px; border-radius: 2px; display: block; }
 #status { font-size: 13px; color: var(--muted); margin-top: 6px; }

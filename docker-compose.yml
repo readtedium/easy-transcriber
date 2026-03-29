@@ -12,3 +12,9 @@ services:
       - ./media:/app/media
       - ./data:/app/data
     restart: unless-stopped
+
+  moonshine:
+    image: ghcr.io/readtedium/easy-transcriber-moonshine:latest
+    profiles:
+      - moonshine
+    restart: unless-stopped

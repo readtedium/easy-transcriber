@@ -21,6 +21,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 - **Keyterms support** — add up to 100 comma-separated keywords to the upload, allowing for accurate detection of proper nouns or jargon-laden terms
 - **Dual-stream mode** — capture mic and system audio simultaneously as separate speakers
 - **Interesting moments** — AI-powered topic extraction highlights the best moments (optional, requires DeepSeek key)
+- **Moonshine local transcription** — optional offline transcription engine via [Moonshine](https://github.com/moonshine-ai/moonshine) (no API key needed); enabled with `docker compose --profile moonshine up`
 - **Transcript history** — sidebar with playback sync; click any word to jump to that moment
 - **Custom speaker names** — Speakers can be edited by hand and selected from a list of prior speakers; transcriptions can also be reset as needed.
 - **Export** — copy to clipboard or download as `.txt`
@@ -165,7 +166,7 @@ node server.js
 
 ## Roadmap
 
-- Additional transcription engines (Whisper, Moonshine)
+- Additional transcription engines (Whisper)
 - Alternatives to DeepSeek for topic extraction (Claude, Ollama, ChatGPT)
 - YouTube closed captions as a fallback for URL transcription
 - SRT export
