@@ -642,6 +642,7 @@ $("reattach-input").addEventListener("change", () => {
       fresh.classList.add("active");
     });
   });
+  wireRenameBadges();
 });
 
 // ── History sidebar ───────────────────────────────────────────────────────────
