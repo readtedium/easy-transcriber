@@ -788,6 +788,7 @@ let liveText = "", liveRecordingStart = null, liveChunks = [], sysChunks = [], v
 let liveUtterances = [];
 let stopMeter = null;
 let videoRecorder = null;
+let micTranscribeRecorder = null, sysTranscribeRecorder = null;
 
 $("record-btn").addEventListener("click", () => isRecording ? stopLive() : startLive());
 
@@ -886,10 +887,20 @@ async function startLive() {
   wsLive.onopen = () => {
     const statusMap = { mic: "Recording…", sys: "Recording system audio…", both: "Recording mic + system…" };
     $("live-status").textContent = statusMap[audioSource] || "Recording…";
-    mediaRecorder = makeRecorder(primaryStream, chunk => {
-      liveChunks.push(chunk);
-      if (wsLive.readyState === 1) wsLive.send(chunk);
-    });
+    if (dual) {
+      const combinedStream = new MediaStream([...micStream.getAudioTracks(), ...sysStream.getAudioTracks()]);
+      mediaRecorder = makeRecorder(combinedStream, chunk => {
+        liveChunks.push(chunk);
+      });
+      micTranscribeRecorder = makeRecorder(micStream, chunk => {
+        if (wsLive.readyState === 1) wsLive.send(chunk);
+      });
+    } else {
+      mediaRecorder = makeRecorder(primaryStream, chunk => {
+        liveChunks.push(chunk);
+        if (wsLive.readyState === 1) wsLive.send(chunk);
+      });
+    }
     if (videoRecorder) videoRecorder.start(1000);
   };
 
@@ -904,8 +915,7 @@ async function startLive() {
     wsSystem.binaryType = "arraybuffer";
 
     wsSystem.onopen = () => {
-      makeRecorder(sysStream, chunk => {
-        sysChunks.push(chunk);
+      sysTranscribeRecorder = makeRecorder(sysStream, chunk => {
         if (wsSystem && wsSystem.readyState === 1) wsSystem.send(chunk);
       });
     };
@@ -946,6 +956,8 @@ function handleWsMessage(e, source) {
 
 function stopLive() {
   mediaRecorder?.stop();
+  micTranscribeRecorder?.stop();
+  sysTranscribeRecorder?.stop();
   videoRecorder?.stop();
   videoRecorder = null;
   wsLive?.close();
