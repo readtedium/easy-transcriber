@@ -6,7 +6,7 @@ A self-hosted transcription web app powered by Deepgram's Nova-3 model. Supports
 
 - **Backend**: Node.js (ESM), Express, ws (WebSocket), @deepgram/sdk, better-sqlite3, multer, ffmpeg, yt-dlp
 - **Frontend**: Vanilla JS (`script.js`), CSS (`styles.css`), HTML (`index.html`) — no build step
-- **AI**: Deepgram Nova-3 (transcription + diarization), DeepSeek (topic extraction)
+- **AI**: Deepgram Nova-3 (transcription + diarization), DeepSeek (topic extraction), 60db (text-to-speech / "Read aloud")
 - **Storage**: SQLite (`data/transcripts.db`), `media/` directory for audio files
 - **Infrastructure**: Docker + docker-compose
 
@@ -15,6 +15,10 @@ A self-hosted transcription web app powered by Deepgram's Nova-3 model. Supports
 ```
 transcriber/
 ├── server.js              # Express + WebSocket server, all API routes
+├── tts/                   # Text-to-speech providers (pluggable)
+│   ├── index.js           # Provider registry + getTtsProvider(name)
+│   ├── provider.js        # TtsProvider interface + browser↔server protocol
+│   └── sixtydb.js         # 60db WebSocket TTS provider
 ├── public/
 │   ├── index.html         # App shell, no inline JS or CSS
 │   ├── script.js          # All frontend logic
@@ -33,6 +37,7 @@ transcriber/
 ```
 DEEPGRAM_API_KEY=     # Required for transcription
 DEEPSEEK_API_KEY=     # Optional — enables "Interesting Moments" topic extraction
+SIXTYDB_API_KEY=      # Optional — enables "Read aloud" text-to-speech (60db)
 SERVER_PORT=3000      # Port to expose on the host
 LOGIN_PASSWORD=       # Optional — enables password-protected login page
 SESSION_SECRET=       # Recommended when LOGIN_PASSWORD is set; random string
@@ -75,6 +80,7 @@ docker compose down && docker compose up --build
 | `POST` | `/login` | Password check with timing-safe compare + rate limiting |
 | `GET` | `/logout` | Destroys session |
 | `WS` | `/live` | Proxy to Deepgram live WebSocket |
+| `WS` | `/tts` | Proxy to a TTS provider (60db) for "Read aloud" |
 
 ### WebSocket Live Transcription
 
@@ -85,6 +91,19 @@ The `/live` WebSocket accepts query params:
 - `keyterm=word` — repeatable; passed to Deepgram for vocabulary hints
 
 In dual mode, the browser opens **two** WebSocket connections — one for mic, one for system audio. Each connects to a separate Deepgram live session. Transcripts come back tagged with `source` so the frontend can assign speaker indices (mic = Speaker 1, system = Speaker 2+).
+
+### Text-to-Speech ("Read aloud")
+
+Optional. Adds the inverse of transcription — turning a transcript back into speech via **60db**. Enabled when `SIXTYDB_API_KEY` is set (or a key is entered in the UI, mirroring the Deepgram key field).
+
+Providers live in `tts/` behind the `TtsProvider` interface (`tts/provider.js`), registered in `tts/index.js`. Adding another engine = implement `bridge()` + register it; nothing else changes. The current provider (`tts/sixtydb.js`) uses 60db's **WebSocket** transport (`wss://api.60db.ai/ws/tts`).
+
+The `/tts` WebSocket is a server-side proxy (same auth path as `/live`): the browser never holds the key when it lives in env. Query params: `key`, `provider`, `voice`, `speed`, `stability`, `similarity`, `rate`, `encoding`. The browser↔server message protocol is provider-agnostic:
+
+- browser → server: `{ type: "speak", text }`, `{ type: "close" }`
+- server → browser: `{ type: "ready", sampleRate, encoding }`, `{ type: "audio", audio: <base64 PCM> }`, `{ type: "flushed" }`, `{ type: "done" }`, `{ type: "error", message }`
+
+Audio frames are base64 **LINEAR16** mono PCM at 24 kHz; the frontend (`TtsPlayer` in `script.js`) decodes and schedules them back-to-back through the Web Audio API so playback starts before synthesis finishes. The "Read aloud" button in the transcript toolbar speaks the full transcript; clicking again stops.
 
 ### History Entry Schema
 

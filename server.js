@@ -3,6 +3,7 @@ import express from "express";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import { createClient } from "@deepgram/sdk";
+import { getTtsProvider } from "./tts/index.js";
 import Database from "better-sqlite3";
 import multer from "multer";
 import cors from "cors";
@@ -163,6 +164,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 const app = express();
 const server = createServer({ maxHeaderSize: 32768 }, app);
 const wss = new WebSocketServer({ noServer: true });
+const ttsWss = new WebSocketServer({ noServer: true });
 
 app.use(cors());
 app.use(express.json());
@@ -205,7 +207,11 @@ const loginLimiter = rateLimit({
   handler: (_req, res) => res.status(429).send(LOGIN_HTML.replace("{{ERROR}}", '<p class="error">Too many attempts. Try again in 15 minutes.</p>')),
 });
 
-app.get("/auth", (req, res) => res.json({ enabled: !!process.env.LOGIN_PASSWORD, hasDeepgramKey: !!process.env.DEEPGRAM_API_KEY }));
+app.get("/auth", (req, res) => res.json({
+  enabled: !!process.env.LOGIN_PASSWORD,
+  hasDeepgramKey: !!process.env.DEEPGRAM_API_KEY,
+  hasSixtyDbKey: !!process.env.SIXTYDB_API_KEY,
+}));
 
 app.get("/login", (req, res) => {
   if (!process.env.LOGIN_PASSWORD || req.session?.authed) return res.redirect("/");
@@ -593,16 +599,41 @@ wss.on("connection", (clientWs, req) => {
   })();
 });
 
+// ── Text-to-speech (60db) ─────────────────────────────────────────────────────
+// Proxies a browser WebSocket to a 60db TTS session. The browser never holds the
+// 60db key when it lives in env; provider selection and synthesis params come in
+// as query params. See tts/provider.js for the browser↔server message protocol.
+ttsWss.on("connection", (clientWs, req) => {
+  const qIndex = req.url.indexOf("?");
+  const params = new URLSearchParams(qIndex >= 0 ? req.url.slice(qIndex + 1) : "");
+  const apiKey = params.get("key") || process.env.SIXTYDB_API_KEY;
+  const numParam = name => (params.has(name) ? Number(params.get(name)) : undefined);
+
+  const provider = getTtsProvider(params.get("provider") || "60db");
+  provider.bridge(clientWs, {
+    apiKey,
+    voiceId: params.get("voice") || undefined,
+    speed: numParam("speed"),
+    stability: numParam("stability"),
+    similarity: numParam("similarity"),
+    sampleRate: numParam("rate"),
+    encoding: params.get("encoding") || undefined,
+  });
+});
+
 // ── WebSocket upgrade (with auth) ─────────────────────────────────────────────
 server.on("upgrade", (req, socket, head) => {
-  if (!req.url.startsWith("/live")) { socket.destroy(); return; }
+  const isLive = req.url.startsWith("/live");
+  const isTts = req.url.startsWith("/tts");
+  if (!isLive && !isTts) { socket.destroy(); return; }
   sessionMiddleware(req, { end: () => {}, getHeader: () => {}, setHeader: () => {} }, () => {
     if (process.env.LOGIN_PASSWORD && !req.session?.authed) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, ws => wss.emit("connection", ws, req));
+    const target = isTts ? ttsWss : wss;
+    target.handleUpgrade(req, socket, head, ws => target.emit("connection", ws, req));
   });
 });
 

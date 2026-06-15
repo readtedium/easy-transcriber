@@ -21,6 +21,7 @@ Not sure if this is for you? Feel free to kick the tires—Deepgram offers new u
 - **Keyterms support** — add up to 100 comma-separated keywords to the upload, allowing for accurate detection of proper nouns or jargon-laden terms
 - **Dual-stream mode** — capture mic and system audio simultaneously as separate speakers
 - **Interesting moments** — AI-powered topic extraction highlights the best moments (optional, requires DeepSeek key)
+- **Read aloud** — play any transcript back as speech via [60db](https://docs.60db.ai) text-to-speech, streamed as you listen (optional, requires 60db key)
 - **Transcript history** — sidebar with playback sync; click any word to jump to that moment
 - **Custom speaker names** — Speakers can be edited by hand and selected from a list of prior speakers; transcriptions can also be reset as needed.
 - **Export** — copy to clipboard or download as `.txt`
@@ -74,6 +75,7 @@ Copy `.env.example` to `.env`:
 ```env
 DEEPGRAM_API_KEY=   # Required for transcription
 DEEPSEEK_API_KEY=   # Optional — enables "Interesting Moments" topic extraction
+SIXTYDB_API_KEY=    # Optional — enables "Read aloud" text-to-speech (60db)
 SERVER_PORT=3000    # Port to expose on the host (default: 3000)
 LOGIN_PASSWORD=     # Optional — enables password protection
 SESSION_SECRET=     # Recommended when LOGIN_PASSWORD is set; random string
@@ -113,6 +115,10 @@ Video is compressed to 480p by default to keep file sizes manageable. Uncheck **
 ## Interesting Moments
 
 When a `DEEPSEEK_API_KEY` is set, Transcriber automatically analyzes each transcript after it finishes and surfaces 10–20 notable timestamps with short labels. You can regenerate these at any time with the **Refresh** button.
+
+## Read Aloud (text-to-speech)
+
+When a `SIXTYDB_API_KEY` is set (or entered in the top-right key field), a **🔊 Read aloud** button appears in the transcript toolbar. It streams the transcript to [60db](https://docs.60db.ai)'s text-to-speech engine over a WebSocket and plays the audio back as it arrives — no need to wait for the whole thing to render. Click again to stop. TTS providers live in `tts/` behind a small interface, so additional engines can be added without touching the rest of the app.
 
 ## Running without Docker
 

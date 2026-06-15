@@ -37,18 +37,27 @@ function expandUploadCard() {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 let serverHasKey = false;
+let serverHasTtsKey = false;
 fetch("/auth").then(r => r.json()).then(d => {
   if (d.enabled) $("logout-link").style.display = "";
   if (d.hasDeepgramKey) {
     serverHasKey = true;
-    $("api-key-row").style.display = "none";
+    $("api-key").style.display = "none";
+  }
+  if (d.hasSixtyDbKey) {
+    serverHasTtsKey = true;
+    $("tts-key").style.display = "none";
   }
 }).catch(() => {});
 
-// ── API key ───────────────────────────────────────────────────────────────────
+// ── API keys ──────────────────────────────────────────────────────────────────
 const savedKey = localStorage.getItem("dg_key");
 if (savedKey) $("api-key").value = savedKey;
 $("api-key").addEventListener("input", () => localStorage.setItem("dg_key", $("api-key").value));
+
+const savedTtsKey = localStorage.getItem("sixtydb_key");
+if (savedTtsKey) $("tts-key").value = savedTtsKey;
+$("tts-key").addEventListener("input", () => localStorage.setItem("sixtydb_key", $("tts-key").value));
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 document.querySelectorAll(".tab").forEach(btn => {
@@ -395,6 +404,7 @@ function renderResult(result, fromHistory = false, ytId = null) {
     a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
     a.download = "transcript.txt"; a.click();
   };
+  $("btn-read-aloud").onclick = () => toggleReadAloud(items.map(u => u.transcript).join(" "));
 
   const resetBtn = $("btn-reset-names");
   resetBtn.style.display = Object.keys(currentSpeakerNames).length ? "" : "none";
@@ -1006,6 +1016,120 @@ function stopLive() {
   videoChunks = [];
   liveUtterances = [];
   liveRecordingStart = null;
+}
+
+// ── Read aloud (60db TTS) ─────────────────────────────────────────────────────
+// Streams base64 LINEAR16 PCM frames from the server's /tts proxy and plays them
+// back-to-back through the Web Audio API as they arrive.
+let ttsWs = null;
+let ttsPlayer = null;
+
+function b64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+class TtsPlayer {
+  constructor(sampleRate) {
+    this.sampleRate = sampleRate;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
+    this.nextTime = this.ctx.currentTime;
+    this.sources = [];
+    this.onended = null;
+    this.pending = 0;
+    this.finished = false;
+  }
+  pushPcm16(arrayBuffer) {
+    const int16 = new Int16Array(arrayBuffer);
+    if (!int16.length) return;
+    const float32 = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+    const buf = this.ctx.createBuffer(1, float32.length, this.sampleRate);
+    buf.copyToChannel(float32, 0);
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.ctx.destination);
+    const startAt = Math.max(this.nextTime, this.ctx.currentTime);
+    this.pending++;
+    src.onended = () => {
+      this.pending--;
+      if (this.finished && this.pending === 0) this.onended?.();
+    };
+    src.start(startAt);
+    this.nextTime = startAt + buf.duration;
+    this.sources.push(src);
+  }
+  // No more audio is coming — fire onended once the queued buffers finish.
+  finish() {
+    this.finished = true;
+    if (this.pending === 0) this.onended?.();
+  }
+  stop() {
+    this.onended = null;
+    for (const s of this.sources) { try { s.onended = null; s.stop(); } catch {} }
+    this.sources = [];
+    try { this.ctx.close(); } catch {}
+  }
+}
+
+function resetReadAloudBtn() {
+  const btn = $("btn-read-aloud");
+  if (btn) { btn.textContent = "🔊 Read aloud"; btn.classList.remove("speaking"); }
+}
+
+function stopReadAloud() {
+  if (ttsWs) { try { ttsWs.close(); } catch {} ttsWs = null; }
+  if (ttsPlayer) { ttsPlayer.stop(); ttsPlayer = null; }
+  resetReadAloudBtn();
+}
+
+function toggleReadAloud(text) {
+  // Clicking while speaking stops playback.
+  if (ttsWs || ttsPlayer) { stopReadAloud(); return; }
+  text = (text || "").trim();
+  if (!text) return;
+
+  const btn = $("btn-read-aloud");
+  const key = $("tts-key").value.trim();
+  if (!key && !serverHasTtsKey) {
+    alert("Enter a 60db API key (top right) to use Read aloud.");
+    return;
+  }
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const sampleRate = 24000;
+  const params = new URLSearchParams({ rate: String(sampleRate), encoding: "LINEAR16" });
+  if (key) params.set("key", key);
+
+  btn.textContent = "■ Stop";
+  btn.classList.add("speaking");
+
+  ttsWs = new WebSocket(`${proto}://${location.host}/tts?${params}`);
+  ttsWs.onopen = () => ttsWs.send(JSON.stringify({ type: "speak", text }));
+  ttsWs.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "ready") {
+      ttsPlayer = new TtsPlayer(msg.sampleRate || sampleRate);
+      ttsPlayer.onended = () => stopReadAloud();
+    } else if (msg.type === "audio") {
+      ttsPlayer?.pushPcm16(b64ToArrayBuffer(msg.audio));
+    } else if (msg.type === "done") {
+      ttsPlayer?.finish();
+    } else if (msg.type === "error") {
+      console.error("TTS error:", msg.message);
+      alert("Read aloud error: " + msg.message);
+      stopReadAloud();
+    }
+  };
+  ttsWs.onerror = () => { resetReadAloudBtn(); };
+  ttsWs.onclose = () => {
+    ttsWs = null;
+    // Socket closed — drain any queued audio, then reset via onended.
+    if (ttsPlayer) ttsPlayer.finish();
+    else resetReadAloudBtn();
+  };
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
